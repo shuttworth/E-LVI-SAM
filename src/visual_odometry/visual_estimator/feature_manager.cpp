@@ -46,24 +46,28 @@ bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vec
 {
     ROS_DEBUG("input feature: %d", (int)image.size());
     ROS_DEBUG("num of feature: %d", getFeatureCount());
-    double parallax_sum = 0;
-    int parallax_num = 0;
-    last_track_num = 0;
+    double parallax_sum = 0; // 视差总和
+    int parallax_num = 0; // 计算视差的特征点数, 用于计算平均视差
+    last_track_num = 0;  // 跟踪上的特征点数
     for (auto &id_pts : image)
     {
+        // id_pts是map的每个键值对，id_pts.second[0]是第一个相机的观测信息
         FeaturePerFrame f_per_fra(id_pts.second[0].second, td);
 
         // find feature id in the feature bucket
+        // 查找特征list中是否包含当前的关键点
         int feature_id = id_pts.first;
         auto it = find_if(feature.begin(), feature.end(), [feature_id](const FeaturePerId &it)
-                          {return it.feature_id == feature_id;});
-
+                          {return it.feature_id == feature_id;}); // find_if,stl库条件式搜索
+        
+        // 不包含，加入到特征list，并加入这次第一个相机观测
         if (it == feature.end())
         {
             // this feature in the image is observed for the first time, create a new feature object
             feature.push_back(FeaturePerId(feature_id, frame_count, f_per_fra.depth));
             feature.back().feature_per_frame.push_back(f_per_fra);
         }
+        // 若已经包含，则另外添加这次的第一个相机观测，并计数，如果此前这个特征不包含深度值，则用这个观测赋值
         else if (it->feature_id == feature_id)
         {
             // this feature in the image has been observed before
@@ -80,25 +84,30 @@ bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vec
         }
     }
 
+    // 如果当前帧是第0帧或第1帧 或 跟踪到的特征点数小于20，说明该图片帧为关键帧，应当边缘化旧帧
     if (frame_count < 2 || last_track_num < 20)
         return true;
 
     for (auto &it_per_id : feature)
     {
+        // 如果这个特征的起始观测帧在上上帧以前，最终观测帧是上一帧或当前帧，视差计数+1
         if (it_per_id.start_frame <= frame_count - 2 &&
             it_per_id.start_frame + int(it_per_id.feature_per_frame.size()) - 1 >= frame_count - 1)
         {
+            // 计算特征点的视差 (倒数第二帧 和 倒数第三帧 之间的视差)
             parallax_sum += compensatedParallax2(it_per_id, frame_count);
             parallax_num++;
         }
     }
 
+    // 如果视差计数为0，说明上一帧和当前帧基本都是新特征，当前帧必然是关键帧，应当边缘化旧帧
     if (parallax_num == 0)
     {
         return true;
     }
     else
     {
+        // 否则，根据平均视差决定marge最老帧还是次新帧
         ROS_DEBUG("parallax_sum: %lf, parallax_num: %d", parallax_sum, parallax_num);
         ROS_DEBUG("current parallax: %lf", parallax_sum / parallax_num * FOCAL_LENGTH);
         return parallax_sum / parallax_num >= MIN_PARALLAX;

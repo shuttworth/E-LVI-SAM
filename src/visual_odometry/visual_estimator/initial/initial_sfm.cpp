@@ -119,14 +119,18 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 			  vector<SFMFeature> &sfm_f, map<int, Vector3d> &sfm_tracked_points)
 {
 	feature_num = sfm_f.size();
-	//cout << "set 0 and " << l << " as known " << endl;
+	////cout << "set 0 and " << l << " as known " << endl;
 	// have relative_r relative_t
 	// intial two view
+    // 参考帧位姿为原点
 	q[l].w() = 1;
 	q[l].x() = 0;
 	q[l].y() = 0;
 	q[l].z() = 0;
 	T[l].setZero();
+    // 最新帧位姿为relative_R和T，
+    // 这里需要注意的是，此处最新帧左乘relative_R和T的逆为参考帧位姿，
+    // 说明此时坐标系为Twc而不是SLAM常用的Tcw，后续将要转换
 	q[frame_num - 1] = q[l] * Quaterniond(relative_R);
 	T[frame_num - 1] = relative_T;
 	//cout << "init q_l " << q[l].w() << " " << q[l].vec().transpose() << endl;
@@ -140,6 +144,7 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	double c_translation[frame_num][3];
 	Eigen::Matrix<double, 3, 4> Pose[frame_num];
 
+    // 将Twc转换为Tcw
 	c_Quat[l] = q[l].inverse();
 	c_Rotation[l] = c_Quat[l].toRotationMatrix();
 	c_Translation[l] = -1 * (c_Rotation[l] * T[l]);
@@ -153,8 +158,11 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	Pose[frame_num - 1].block<3, 1>(0, 3) = c_Translation[frame_num - 1];
 
 
-	//1: trangulate between l ----- frame_num - 1
-	//2: solve pnp l + 1; trangulate l + 1 ------- frame_num - 1; 
+	// 1: trangulate between l ----- frame_num - 1
+	// 2: solve pnp l + 1; trangulate l + 1 ------- frame_num - 1;
+    // 先三角化参考帧与最新帧共视特征点，
+    // 利用已经三角化的特征点PnP计算参考帧与（参考帧与最新帧之间的）较新帧的相对位姿，
+    // 继续三角化较新帧与最新帧的共视特征点
 	for (int i = l; i < frame_num - 1 ; i++)
 	{
 		// solve pnp
@@ -174,11 +182,14 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 		// triangulate point based on the solve pnp result
 		triangulateTwoFrames(i, Pose[i], frame_num - 1, Pose[frame_num - 1], sfm_f);
 	}
-	//3: triangulate l-----l+1 l+2 ... frame_num -2
+	// 3: triangulate l-----l+1 l+2 ... frame_num -2
+    // 以上三角化的都是较新帧与最新帧的共视点，现在三角化参考帧与较新帧的共视点
 	for (int i = l + 1; i < frame_num - 1; i++)
 		triangulateTwoFrames(l, Pose[l], i, Pose[i], sfm_f);
-	//4: solve pnp l-1; triangulate l-1 ----- l
+	// 4: solve pnp l-1; triangulate l-1 ----- l
 	//             l-2              l-2 ----- l
+    // 继续PnP计算（从最旧帧到参考帧之间的）较旧帧的位姿，
+    // 并三角化较旧帧与参考帧的共视点
 	for (int i = l - 1; i >= 0; i--)
 	{
 		//solve pnp
@@ -194,7 +205,8 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 		//triangulate
 		triangulateTwoFrames(i, Pose[i], l, Pose[l], sfm_f);
 	}
-	//5: triangulate all other points
+	// 5: triangulate all other points
+    // 三角化其他所有的特征点
 	for (int j = 0; j < feature_num; j++)
 	{
 		if (sfm_f[j].state == true)
@@ -229,10 +241,11 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 		cout << "solvePnP  t" << " i " << i <<"  " << t_tmp.x() <<"  "<< t_tmp.y() <<"  "<< t_tmp.z() << endl;
 	}
 */
-	//full BA
+	// full BA
+    // 固定参考帧的RT和最新帧的T，进行窗口全局BA
 	ceres::Problem problem;
 	ceres::LocalParameterization* local_parameterization = new ceres::QuaternionParameterization();
-	//cout << " begin full BA " << endl;
+	////cout << " begin full BA " << endl;
 	for (int i = 0; i < frame_num; i++)
 	{
 		//double array for ceres
@@ -254,7 +267,6 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 			problem.SetParameterBlockConstant(c_translation[i]);
 		}
 	}
-
 	for (int i = 0; i < feature_num; i++)
 	{
 		if (sfm_f[i].state != true)
@@ -287,6 +299,7 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 		//cout << "vision only BA not converge " << endl;
 		return false;
 	}
+    // 返回优化后的窗口位姿（转换回Twc坐标系）和所有的三角化成功的特征点
 	for (int i = 0; i < frame_num; i++)
 	{
 		q[i].w() = c_rotation[i][0]; 

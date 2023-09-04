@@ -248,7 +248,8 @@ bool Estimator::initialStructure()
         for (map<double, ImageFrame>::iterator frame_it = all_image_frame.begin(); frame_it != all_image_frame.end(); frame_it++)
             frame_it->second.is_key_frame = false;
 
-        // check if lidar info in the window is valid
+        // check if lidar info in the window is valid 
+        // 必须窗口内的lidar信息全都可用
         for (int i = 0; i <= WINDOW_SIZE; i++)
         {
             if (all_image_frame[Headers[i].stamp.toSec()].reset_id < 0 ||
@@ -261,9 +262,11 @@ bool Estimator::initialStructure()
             }
         }
 
+        // 如果lidar信息完全可用，则可以直接通过lidar成功初始化
         if (lidar_info_available == true)
         {
             // Update state
+            // 采用lidar信息更新参数，更新预积分值，并设为关键帧
             for (int i = 0; i <= WINDOW_SIZE; i++)
             {
                 Ps[i] = all_image_frame[Headers[i].stamp.toSec()].T;
@@ -280,13 +283,13 @@ bool Estimator::initialStructure()
             // update gravity
             g = Eigen::Vector3d(0, 0, all_image_frame[Headers[0].stamp.toSec()].gravity);
 
-            // reset all features
+            // reset all features 清空所有特征的深度值
             VectorXd dep = f_manager.getDepthVector();
             for (int i = 0; i < dep.size(); i++)
                 dep[i] = -1;
             f_manager.clearDepth(dep);
 
-            // triangulate all features
+            // triangulate all features  根据pose对所有特征三角化
             Vector3d TIC_TMP[NUM_OF_CAM];
             for (int i = 0; i < NUM_OF_CAM; i++)
                 TIC_TMP[i].setZero();
@@ -298,7 +301,7 @@ bool Estimator::initialStructure()
         }
     }
 
-    // check imu observibility
+    // check imu observibility  检查imu能观性
     {
         map<double, ImageFrame>::iterator frame_it;
         Vector3d sum_g;
@@ -309,8 +312,10 @@ bool Estimator::initialStructure()
             sum_g += tmp_g;
         }
         Vector3d aver_g;
+        // 计算平均加速度
         aver_g = sum_g * 1.0 / ((int)all_image_frame.size() - 1);
         double var = 0;
+        // 计算加速度均方差
         for (frame_it = all_image_frame.begin(), frame_it++; frame_it != all_image_frame.end(); frame_it++)
         {
             double dt = frame_it->second.pre_integration->sum_dt;
@@ -320,6 +325,7 @@ bool Estimator::initialStructure()
         }
         var = sqrt(var / ((int)all_image_frame.size() - 1));
         // ROS_WARN("IMU variation %f!", var);
+        // 均方差小，则代表imu激励不足，imu能观性差
         if (var < 0.25)
         {
             ROS_INFO("Trying to initialize VINS, IMU excitation not enough!");
@@ -331,6 +337,7 @@ bool Estimator::initialStructure()
     Vector3d T[frame_count + 1];
     map<int, Vector3d> sfm_tracked_points;
     vector<SFMFeature> sfm_f;
+    // 将所有特征点的所有观测导入到sfm问题中
     for (auto &it_per_id : f_manager.feature)
     {
         int imu_j = it_per_id.start_frame - 1;
@@ -348,11 +355,14 @@ bool Estimator::initialStructure()
     Matrix3d relative_R;
     Vector3d relative_T;
     int l;
+    // 找到窗口内的某一帧，与最新一帧的平均视差足够大并且通过二者计算的相对位姿足够精准
+    // 称这一帧为参考帧l，现在知道了参考帧与最新帧之间的位姿变换relative_R和T
     if (!relativePose(relative_R, relative_T, l))
     {
         ROS_INFO("Not enough features or parallax; Move device around");
         return false;
     }
+    // 利用sfm方法求解位姿从窗口内所有关键帧位姿
     GlobalSFM sfm;
     if (!sfm.construct(frame_count + 1, Q, T, l,
                        relative_R, relative_T,
@@ -371,6 +381,7 @@ bool Estimator::initialStructure()
     {
         // provide initial guess
         cv::Mat r, rvec, t, D, tmp_r;
+        // 跳过关键帧
         if ((frame_it->first) == Headers[i].stamp.toSec())
         {
             frame_it->second.is_key_frame = true;
@@ -379,6 +390,7 @@ bool Estimator::initialStructure()
             i++;
             continue;
         }
+        // 这个帧位姿的初值应当为与它最近的并且晚于它的关键帧位姿（Twc-->Tcw）
         if ((frame_it->first) > Headers[i].stamp.toSec())
         {
             i++;
@@ -421,6 +433,7 @@ bool Estimator::initialStructure()
             ROS_DEBUG("solve pnp fail!");
             return false;
         }
+        // 这里又将Tcw转换为Twc，旋转矩阵是正交矩阵，其逆矩阵就是转置
         cv::Rodrigues(rvec, r);
         MatrixXd R_pnp, tmp_R_pnp;
         cv::cv2eigen(r, tmp_R_pnp);
@@ -432,6 +445,7 @@ bool Estimator::initialStructure()
         frame_it->second.T = T_pnp;
     }
 
+    // 相机IMU松耦合初始化
     if (visualInitialAlign())
         return true;
     else
@@ -445,6 +459,7 @@ bool Estimator::visualInitialAlign()
 {
     VectorXd x;
     // solve scale
+    // 相机IMU松耦合初始化计算尺度
     bool result = VisualIMUAlignment(all_image_frame, Bgs, g, x);
     if (!result)
     {
@@ -453,6 +468,7 @@ bool Estimator::visualInitialAlign()
     }
 
     // change state
+    // 获取最新的位姿结果
     for (int i = 0; i <= frame_count; i++)
     {
         Matrix3d Ri = all_image_frame[Headers[i].stamp.toSec()].R;
@@ -469,6 +485,7 @@ bool Estimator::visualInitialAlign()
     f_manager.clearDepth(dep);
 
     // triangulat on cam pose , no tic
+    // 利用新的位姿结果重新三角化
     Vector3d TIC_TMP[NUM_OF_CAM];
     for (int i = 0; i < NUM_OF_CAM; i++)
         TIC_TMP[i].setZero();
@@ -477,10 +494,12 @@ bool Estimator::visualInitialAlign()
     f_manager.triangulate(Ps, &(TIC_TMP[0]), &(RIC[0]));
 
     double s = (x.tail<1>())(0);
+    // 用最新的bias更新预积分值
     for (int i = 0; i <= WINDOW_SIZE; i++)
     {
         pre_integrations[i]->repropagate(Vector3d::Zero(), Bgs[i]);
     }
+    // 用最新的尺度更新各个参数
     for (int i = frame_count; i >= 0; i--)
         Ps[i] = s * Ps[i] - Rs[i] * TIC[0] - (s * Ps[0] - Rs[0] * TIC[0]);
     int kv = -1;
@@ -501,6 +520,7 @@ bool Estimator::visualInitialAlign()
         it_per_id.estimated_depth *= s;
     }
 
+    // 用最新的重力加速度更新各个参数
     Matrix3d R0 = Utility::g2R(g);
     double yaw = Utility::R2ypr(R0 * Rs[0]).x();
     R0 = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;

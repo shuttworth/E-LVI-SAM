@@ -75,6 +75,7 @@ class IntegrationBase
     // after optimization, repropagate pre-integration using the updated bias
     void repropagate(const Eigen::Vector3d &_linearized_ba, const Eigen::Vector3d &_linearized_bg)
     {
+        // 采用最新的bias，恢复其他参数为初值，重新传播（预积分）
         sum_dt = 0.0;
         acc_0 = linearized_acc;
         gyr_0 = linearized_gyr;
@@ -141,17 +142,23 @@ class IntegrationBase
                             Eigen::Vector3d &result_delta_p, Eigen::Quaterniond &result_delta_q, Eigen::Vector3d &result_delta_v,
                             Eigen::Vector3d &result_linearized_ba, Eigen::Vector3d &result_linearized_bg, bool update_jacobian)
     {
-        //ROS_INFO("midpoint integration");
+        // ROS_INFO("midpoint integration");
+        // 中值积分
         Vector3d un_acc_0 = delta_q * (_acc_0 - linearized_ba);
         Vector3d un_gyr = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;
         result_delta_q = delta_q * Quaterniond(1, un_gyr(0) * _dt / 2, un_gyr(1) * _dt / 2, un_gyr(2) * _dt / 2);
         Vector3d un_acc_1 = result_delta_q * (_acc_1 - linearized_ba);
         Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);
+        // 得到相对于创建该Integration实例时的增量
         result_delta_p = delta_p + delta_v * _dt + 0.5 * un_acc * _dt * _dt;
         result_delta_v = delta_v + un_acc * _dt;
         result_linearized_ba = linearized_ba;
         result_linearized_bg = linearized_bg;         
 
+        // 非线性优化需要当前预积分值的协方差（权重）
+        // 预积分是一段时间多次测量得到的结果，因此每次预积分值的误差来源于本次测量噪声和上次预积分误差的影响
+        // 测量噪声由预先标定而来
+        // 预积分误差的递推==上次的状态量误差对本次预积分值（增量）的影响，即求增量值对[P,V,Q,Ba,Bg]的导数
         if(update_jacobian)
         {
             Vector3d w_x = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;
@@ -202,7 +209,9 @@ class IntegrationBase
             V.block<3, 3>(9, 12) = MatrixXd::Identity(3,3) * _dt;
             V.block<3, 3>(12, 15) = MatrixXd::Identity(3,3) * _dt;
 
+            // 其中,Jacobian 的初始值为Jk = I，这里计算出来的Jk+1 只是为了给后面提供对 bias 的Jacobian。
             jacobian = F * jacobian;
+            // 由于噪声之间相互独立，Q矩阵非对角线元素均为零，对角线元素为标定得到的加速度计和陀螺仪的各个轴的噪声的平方；
             covariance = F * covariance * F.transpose() + V * noise * V.transpose();
         }
 
@@ -216,6 +225,7 @@ class IntegrationBase
     {
         Eigen::Matrix<double, 15, 1> residuals;
 
+        // 取出IMU的各个预积分值对bias误差的导数(from雅克比矩阵)
         Eigen::Matrix3d dp_dba = jacobian.block<3, 3>(O_P, O_BA);
         Eigen::Matrix3d dp_dbg = jacobian.block<3, 3>(O_P, O_BG);
 
@@ -224,13 +234,19 @@ class IntegrationBase
         Eigen::Matrix3d dv_dba = jacobian.block<3, 3>(O_V, O_BA);
         Eigen::Matrix3d dv_dbg = jacobian.block<3, 3>(O_V, O_BG);
 
+        // 计算当前预积分段相比于上次的bias的变化量，即bias的误差;
         Eigen::Vector3d dba = Bai - linearized_ba;
         Eigen::Vector3d dbg = Bgi - linearized_bg;
 
+        // 已知IMU的各个预积分值对bias的导数(雅克比矩阵)，已知两帧之间bias的变化量，
+        // 计算由bias的变化导致的pvq的变化量，然后将其叠加到原来的预积分值上进行补偿，得到更精确的预积分值；
         Eigen::Quaterniond corrected_delta_q = delta_q * Utility::deltaQ(dq_dbg * dbg);
         Eigen::Vector3d corrected_delta_v = delta_v + dv_dba * dba + dv_dbg * dbg;
         Eigen::Vector3d corrected_delta_p = delta_p + dp_dba * dba + dp_dbg * dbg;
 
+        // 残差 = 测量值 - 预计值
+        // 测量值：根据上一帧的PVQ和测量值推导出当前帧的PVQ(预积分)，当前帧bias
+        // 预计值：根据bias变化与雅克比矩阵推导出的当前帧PVQ，前一帧的bias
         residuals.block<3, 1>(O_P, 0) = Qi.inverse() * (0.5 * G * sum_dt * sum_dt + Pj - Pi - Vi * sum_dt) - corrected_delta_p;
         residuals.block<3, 1>(O_R, 0) = 2 * (corrected_delta_q.inverse() * (Qi.inverse() * Qj)).vec();
         residuals.block<3, 1>(O_V, 0) = Qi.inverse() * (G * sum_dt + Vj - Vi) - corrected_delta_v;
