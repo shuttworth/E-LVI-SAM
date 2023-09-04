@@ -12,7 +12,6 @@
 #include "parameters.h"
 #include "utility/visualization.h"
 
-
 Estimator estimator;
 
 std::condition_variable con;
@@ -29,7 +28,6 @@ std::mutex m_state;
 std::mutex m_estimator;
 std::mutex m_odom;
 
-// imu相关全局变量
 double latest_time;
 Eigen::Vector3d tmp_P;
 Eigen::Quaterniond tmp_Q;
@@ -42,38 +40,32 @@ bool init_feature = 0;
 bool init_imu = 1;
 double last_imu_t = 0;
 
-// 从当前的imu测量值和上一时刻的PQV进行递推得到当前时刻的PQV
 void predict(const sensor_msgs::ImuConstPtr &imu_msg)
 {
     double t = imu_msg->header.stamp.toSec();
-    // 如果是第一帧imu数据则不进行处理
     if (init_imu)
     {
         latest_time = t;
         init_imu = 0;
         return;
     }
-    // 计算当前imu_msg 距离上一个时刻之间的时间间隔
     double dt = t - latest_time;
     latest_time = t;
-    
-    // 取出imu_msg 中的数据
-    // 加速度
+
     double dx = imu_msg->linear_acceleration.x;
     double dy = imu_msg->linear_acceleration.y;
     double dz = imu_msg->linear_acceleration.z;
     Eigen::Vector3d linear_acceleration{dx, dy, dz};
-    // 角速度
+
     double rx = imu_msg->angular_velocity.x;
     double ry = imu_msg->angular_velocity.y;
     double rz = imu_msg->angular_velocity.z;
     Eigen::Vector3d angular_velocity{rx, ry, rz};
-    
-    // 中值积分计算PVQ
+
     Eigen::Vector3d un_acc_0 = tmp_Q * (acc_0 - tmp_Ba) - estimator.g;
 
     Eigen::Vector3d un_gyr = 0.5 * (gyr_0 + angular_velocity) - tmp_Bg;
-    tmp_Q = tmp_Q * Utility::deltaQ(un_gyr * dt); // 四元数中值积分
+    tmp_Q = tmp_Q * Utility::deltaQ(un_gyr * dt);
 
     Eigen::Vector3d un_acc_1 = tmp_Q * (linear_acceleration - tmp_Ba) - estimator.g;
 
@@ -103,7 +95,6 @@ void update()
         predict(tmp_imu_buf.front());
 }
 
-// 对imu数据和图像数据进行时间对齐
 std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>>
 getMeasurements()
 {
@@ -111,15 +102,14 @@ getMeasurements()
 
     while (ros::ok())
     {
-        // 如果两个buf有一个为空就之间返回
         if (imu_buf.empty() || feature_buf.empty())
             return measurements;
-        // imu 太慢，等imu数据
+
         if (!(imu_buf.back()->header.stamp.toSec() > feature_buf.front()->header.stamp.toSec() + estimator.td))
         {
             return measurements;
         }
-        // 图像太老，扔掉图像
+
         if (!(imu_buf.front()->header.stamp.toSec() < feature_buf.front()->header.stamp.toSec() + estimator.td))
         {
             ROS_WARN("throw img, only should happen at the beginning");
@@ -135,7 +125,6 @@ getMeasurements()
             IMUs.emplace_back(imu_buf.front());
             imu_buf.pop();
         }
-        //这里把下一个imu_msg也放进去了,但没有pop，因此当前图像帧和下一图像帧会共用这个imu_msg
         IMUs.emplace_back(imu_buf.front());
         if (IMUs.empty())
             ROS_WARN("no imu between two image");
@@ -144,10 +133,8 @@ getMeasurements()
     return measurements;
 }
 
-// imu回调函数，将imu_msg 保存到 imu_buf，并且将IMU进行状态递推并发布
 void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
 {
-    // 对imu数据进行检查（imu数据应该按时间序列的顺序被订阅）
     if (imu_msg->header.stamp.toSec() <= last_imu_t)
     {
         ROS_WARN("imu message in disorder!");
@@ -156,7 +143,7 @@ void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
     last_imu_t = imu_msg->header.stamp.toSec();
 
     m_buf.lock();
-    imu_buf.push(imu_msg); // 将imu数据放到imu_buf里
+    imu_buf.push(imu_msg);
     m_buf.unlock();
     con.notify_one();
 
@@ -164,20 +151,15 @@ void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
 
     {
         std::lock_guard<std::mutex> lg(m_state);
-        predict(imu_msg);// 递推得到IMU的当前时刻的PQV（初值）
+        predict(imu_msg);
         std_msgs::Header header = imu_msg->header;
-        // 发布最新的由IMU直接递推得到的PQV （用于RVIZ可视化）
         if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
-            pubLatestOdometry(tmp_P, tmp_Q, tmp_V, header, estimator.failureCount);
+            pubLatestOdometry(tmp_P, tmp_Q, tmp_V, header, estimator.failureCount,
+                estimator.tic[0], Eigen::Quaterniond(estimator.ric[0]));
     }
 }
 
-/**
- * @brief 从激光惯性子系统获取的相关参数
- * 
- * @param odom_msg 
- */
-void odom_callback(const nav_msgs::Odometry::ConstPtr& odom_msg)
+void odom_callback(const nav_msgs::Odometry::ConstPtr &odom_msg)
 {
     m_odom.lock();
     odomQueue.push_back(*odom_msg);
@@ -204,9 +186,9 @@ void restart_callback(const std_msgs::BoolConstPtr &restart_msg)
     {
         ROS_WARN("restart the estimator!");
         m_buf.lock();
-        while(!feature_buf.empty())
+        while (!feature_buf.empty())
             feature_buf.pop();
-        while(!imu_buf.empty())
+        while (!imu_buf.empty())
             imu_buf.pop();
         m_buf.unlock();
         m_estimator.lock();
@@ -222,19 +204,12 @@ void restart_callback(const std_msgs::BoolConstPtr &restart_msg)
 // thread: visual-inertial odometry
 void process()
 {
-    // 该线程在这里不断进行循环
     while (ros::ok())
     {
-        // 定义一个measurements vector，一个图像帧对应多个数据
-        // 1. 获取对其时间后的measurements数据
         std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>> measurements;
         std::unique_lock<std::mutex> lk(m_buf);
-        //等待上面两个接收数据完成就会被唤醒
-        //在提取measurements时互斥锁m_buf会锁住，此时无法接收数据
         con.wait(lk, [&]
-                 {
-            return (measurements = getMeasurements()).size() != 0;
-                 });
+                 { return (measurements = getMeasurements()).size() != 0; });
         lk.unlock();
 
         m_estimator.lock();
@@ -242,17 +217,15 @@ void process()
         {
             auto img_msg = measurement.second;
 
-            // 2. 进行 IMU 预积分
+            // 1. IMU pre-integration
             double dx = 0, dy = 0, dz = 0, rx = 0, ry = 0, rz = 0;
-            // 遍历当前图像帧对应的多个imu数据
             for (auto &imu_msg : measurement.first)
             {
                 double t = imu_msg->header.stamp.toSec();
                 double img_t = img_msg->header.stamp.toSec() + estimator.td;
                 if (t <= img_t)
-                { 
-                    //2.1 对于比图像时间早的imu数据
-                    if (current_time < 0) 
+                {
+                    if (current_time < 0)
                         current_time = t;
                     double dt = t - current_time;
                     ROS_ASSERT(dt >= 0);
@@ -263,13 +236,11 @@ void process()
                     rx = imu_msg->angular_velocity.x;
                     ry = imu_msg->angular_velocity.y;
                     rz = imu_msg->angular_velocity.z;
-                    // 对imu数据进行预积分
                     estimator.processIMU(dt, Vector3d(dx, dy, dz), Vector3d(rx, ry, rz));
                     //printf("imu: dt:%f a: %f %f %f w: %f %f %f\n",dt, dx, dy, dz, rx, ry, rz);
                 }
                 else
                 {
-                    //2.2 对于最后一个imu数据（时间不是严格小于图像时间），做插值处理
                     double dt_1 = img_t - current_time;
                     double dt_2 = t - img_t;
                     current_time = img_t;
@@ -278,7 +249,6 @@ void process()
                     ROS_ASSERT(dt_1 + dt_2 > 0);
                     double w1 = dt_2 / (dt_1 + dt_2);
                     double w2 = dt_1 / (dt_1 + dt_2);
-                    // 插值得到图像时刻的imu数据
                     dx = w1 * dx + w2 * imu_msg->linear_acceleration.x;
                     dy = w1 * dy + w2 * imu_msg->linear_acceleration.y;
                     dz = w1 * dz + w2 * imu_msg->linear_acceleration.z;
@@ -310,15 +280,15 @@ void process()
                 ROS_ASSERT(z == 1);
                 Eigen::Matrix<double, 8, 1> xyz_uv_velocity_depth;
                 xyz_uv_velocity_depth << x, y, z, p_u, p_v, velocity_x, velocity_y, depth;
-                image[feature_id].emplace_back(camera_id,  xyz_uv_velocity_depth);
+                image[feature_id].emplace_back(camera_id, xyz_uv_velocity_depth);
             }
 
             // Get initialization info from lidar odometry
             vector<float> initialization_info;
             m_odom.lock();
+            //; 注意：这里lidar里程计只是为了给VINS做初始化使用的，只要初始化成功之后这个信息就没用了
             initialization_info = odomRegister->getOdometry(odomQueue, img_msg->header.stamp.toSec() + estimator.td);
             m_odom.unlock();
-
 
             estimator.processImage(image, initialization_info, img_msg->header);
             // double whole_t = t_s.toc();
@@ -344,7 +314,6 @@ void process()
     }
 }
 
-
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "vins");
@@ -357,17 +326,20 @@ int main(int argc, char **argv)
 
     registerPub(n);
 
+#if IF_OFFICIAL
     odomRegister = new odometryRegister(n);
+#else
+    Eigen::Vector3d t_lidar_imu = -R_imu_lidar.transpose() * t_imu_lidar;
+    odomRegister = new odometryRegister(n, R_imu_lidar.transpose(), t_lidar_imu);
+#endif
 
-    ros::Subscriber sub_imu     = n.subscribe(IMU_TOPIC,      5000, imu_callback,  ros::TransportHints().tcpNoDelay());
-    ros::Subscriber sub_odom    = n.subscribe("odometry/imu", 5000, odom_callback);
-    ros::Subscriber sub_image   = n.subscribe(PROJECT_NAME + "/vins/feature/feature", 1, feature_callback);
+    ros::Subscriber sub_imu = n.subscribe(IMU_TOPIC, 5000, imu_callback, ros::TransportHints().tcpNoDelay());
+    ros::Subscriber sub_odom = n.subscribe("odometry/imu", 5000, odom_callback);
+    ros::Subscriber sub_image = n.subscribe(PROJECT_NAME + "/vins/feature/feature", 1, feature_callback);
     ros::Subscriber sub_restart = n.subscribe(PROJECT_NAME + "/vins/feature/restart", 1, restart_callback);
-    // TODO：对比vins-mono 多了一个 sub_odom (由LIO系统传递来)，少了一个 sub_relo_points (需要进一步学习)
     if (!USE_LIDAR)
         sub_odom.shutdown();
-    
-    // estimator的主线程
+
     std::thread measurement_process{process};
 
     ros::MultiThreadedSpinner spinner(4);

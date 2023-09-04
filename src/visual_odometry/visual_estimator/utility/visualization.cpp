@@ -21,18 +21,19 @@ static Vector3d last_path(0.0, 0.0, 0.0);
 
 void registerPub(ros::NodeHandle &n)
 {
-    pub_latest_odometry     = n.advertise<nav_msgs::Odometry>               (PROJECT_NAME + "/vins/odometry/imu_propagate", 1000);
-    pub_latest_odometry_ros = n.advertise<nav_msgs::Odometry>               (PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 1000);
-    pub_path                = n.advertise<nav_msgs::Path>                   (PROJECT_NAME + "/vins/odometry/path", 1000);
-    pub_odometry            = n.advertise<nav_msgs::Odometry>               (PROJECT_NAME + "/vins/odometry/odometry", 1000);
-    pub_point_cloud         = n.advertise<sensor_msgs::PointCloud>          (PROJECT_NAME + "/vins/odometry/point_cloud", 1000);
-    pub_margin_cloud        = n.advertise<sensor_msgs::PointCloud>          (PROJECT_NAME + "/vins/odometry/history_cloud", 1000);
-    pub_key_poses           = n.advertise<visualization_msgs::Marker>       (PROJECT_NAME + "/vins/odometry/key_poses", 1000);
-    pub_camera_pose         = n.advertise<nav_msgs::Odometry>               (PROJECT_NAME + "/vins/odometry/camera_pose", 1000);
-    pub_camera_pose_visual  = n.advertise<visualization_msgs::MarkerArray>  (PROJECT_NAME + "/vins/odometry/camera_pose_visual", 1000);
-    pub_keyframe_pose       = n.advertise<nav_msgs::Odometry>               (PROJECT_NAME + "/vins/odometry/keyframe_pose", 1000);
-    pub_keyframe_point      = n.advertise<sensor_msgs::PointCloud>          (PROJECT_NAME + "/vins/odometry/keyframe_point", 1000);
-    pub_extrinsic           = n.advertise<nav_msgs::Odometry>               (PROJECT_NAME + "/vins/odometry/extrinsic", 1000);
+    pub_latest_odometry = n.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/imu_propagate", 1000);
+    //! 重要：发布T_odom_lidar给LIO系统，用于LIO系统后端scan-to-map的位姿初值估计
+    pub_latest_odometry_ros = n.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 1000);
+    pub_path = n.advertise<nav_msgs::Path>(PROJECT_NAME + "/vins/odometry/path", 1000);
+    pub_odometry = n.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/odometry", 1000);
+    pub_point_cloud = n.advertise<sensor_msgs::PointCloud>(PROJECT_NAME + "/vins/odometry/point_cloud", 1000);
+    pub_margin_cloud = n.advertise<sensor_msgs::PointCloud>(PROJECT_NAME + "/vins/odometry/history_cloud", 1000);
+    pub_key_poses = n.advertise<visualization_msgs::Marker>(PROJECT_NAME + "/vins/odometry/key_poses", 1000);
+    pub_camera_pose = n.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/camera_pose", 1000);
+    pub_camera_pose_visual = n.advertise<visualization_msgs::MarkerArray>(PROJECT_NAME + "/vins/odometry/camera_pose_visual", 1000);
+    pub_keyframe_pose = n.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/keyframe_pose", 1000);
+    pub_keyframe_point = n.advertise<sensor_msgs::PointCloud>(PROJECT_NAME + "/vins/odometry/keyframe_point", 1000);
+    pub_extrinsic = n.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/extrinsic", 1000);
 
     cameraposevisual.setScale(1);
     cameraposevisual.setLineWidth(0.05);
@@ -40,7 +41,7 @@ void registerPub(ros::NodeHandle &n)
     keyframebasevisual.setLineWidth(0.01);
 }
 
-tf::Transform transformConversion(const tf::StampedTransform& t)
+tf::Transform transformConversion(const tf::StampedTransform &t)
 {
     double xCur, yCur, zCur, rollCur, pitchCur, yawCur;
     xCur = t.getOrigin().x();
@@ -48,10 +49,14 @@ tf::Transform transformConversion(const tf::StampedTransform& t)
     zCur = t.getOrigin().z();
     tf::Matrix3x3 m(t.getRotation());
     m.getRPY(rollCur, pitchCur, yawCur);
-    return tf::Transform(tf::createQuaternionFromRPY(rollCur, pitchCur, yawCur), tf::Vector3(xCur, yCur, zCur));;
+    return tf::Transform(tf::createQuaternionFromRPY(rollCur, pitchCur, yawCur), tf::Vector3(xCur, yCur, zCur));
+    ;
 }
 
-void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, const Eigen::Vector3d &V, const std_msgs::Header &header, const int& failureId)
+
+void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, 
+    const Eigen::Vector3d &V, const std_msgs::Header &header, const int &failureId,
+    const Eigen::Vector3d &t_ic, const Eigen::Quaterniond &q_ic)
 {
     static tf::TransformBroadcaster br;
     static tf::TransformListener listener;
@@ -60,6 +65,7 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, co
     // Quternion not normalized
     if (Q.x() * Q.x() + Q.y() * Q.y() + Q.z() * Q.z() + Q.w() * Q.w() < 0.99)
         return;
+
 
     // imu odometry in camera frame
     nav_msgs::Odometry odometry;
@@ -78,9 +84,10 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, co
     odometry.twist.twist.linear.z = V.z();
     pub_latest_odometry.publish(odometry);
 
+
+#if IF_OFFICIAL
     // imu odometry in ROS format (change rotation), used for lidar odometry initial guess
     odometry.pose.covariance[0] = double(failureId); // notify lidar odometry failure
-
     tf::Quaternion q_odom_cam(Q.x(), Q.y(), Q.z(), Q.w());
     tf::Quaternion q_cam_to_lidar(0, 1, 0, 0); // mark: camera - lidar
     tf::Quaternion q_odom_ros = q_odom_cam * q_cam_to_lidar;
@@ -89,30 +96,105 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, co
 
     // TF of camera in vins_world in ROS format (change rotation), used for depth registration
     tf::Transform t_w_body = tf::Transform(q_odom_ros, tf::Vector3(P.x(), P.y(), P.z()));
-    tf::StampedTransform trans_world_vinsbody_ros = tf::StampedTransform(t_w_body, header.stamp, "vins_world", "vins_body_ros");
+    tf::StampedTransform trans_world_vinsbody_ros = tf::StampedTransform(
+        t_w_body, header.stamp, "vins_world", "vins_body_ros");
     br.sendTransform(trans_world_vinsbody_ros);
+#else
+    // Step 1: 发布T_odom_lidar给LIO后端的scan-to-map位姿初值估计
+    odometry.pose.covariance[0] = double(failureId); // notify lidar odometry failure
+    //; R_odom_imu
+    tf::Quaternion q_odom_imu(Q.x(), Q.y(), Q.z(), Q.w());   
+    Eigen::Quaterniond q_imu_lidar(R_imu_lidar);
+    //; R_imu_lidar
+    tf::Quaternion q_imu_lidar_tf(q_imu_lidar.x(), q_imu_lidar.y(), q_imu_lidar.z(), q_imu_lidar.w());   
+    //; R_odom_lidar = R_odom_imu * R_imu_lidar
+    tf::Quaternion q_odom_lidar = q_odom_imu * q_imu_lidar_tf;
+    //; t_dodom_lidar = R_odom_imu * t_imu_lidar + t_odom_imu
+    Eigen::Vector3d t_odom_lidar = Q * t_imu_lidar + P;  
+    odometry.pose.pose.position.x = t_odom_lidar.x();
+    odometry.pose.pose.position.y = t_odom_lidar.y();
+    odometry.pose.pose.position.z = t_odom_lidar.z();
+    tf::quaternionTFToMsg(q_odom_lidar, odometry.pose.pose.orientation);
+    pub_latest_odometry_ros.publish(odometry);
 
+    // Step 2: 发布IMU频率下的T_odom_imu的tf位姿变换
+    tf::Transform t_w_body = tf::Transform(q_odom_imu, tf::Vector3(P.x(), P.y(), P.z()));
+    tf::StampedTransform trans_world_vinsBody = tf::StampedTransform(
+        t_w_body, header.stamp, "vins_world", "vins_body_imuhz");
+    br.sendTransform(trans_world_vinsBody);
+
+    // Step 3: 发布camera 和 IMU之间的外参，这个在动态估计外参的时候会变换，所以前端深度注册也要使用这个动态外参
+    //; 另外这里发布外参的时候直接发布了vins相机的FLU坐标系的变换，因为前端深度注册要用相机的FLU坐标系
+    tf::Transform transform;
+    tf::Quaternion q;
+    //; Eigen::Quaterniond(0.5, 0.5, -0.5, 0.5)对应的旋转矩阵是R_c_cFLU，即相机的
+    //; 前左上坐标系 -> 正常的相机右下前坐标系 之间的旋转，结果就是[0, -1, 0; 0, 0, -1; 1, 0, 0]
+    //; R_imu_cFLU = R_imu_cam * R_cam_camFLU
+    Eigen::Quaterniond q_i_cFLU = q_ic * Eigen::Quaterniond(0.5, 0.5, -0.5, 0.5);
+    transform.setOrigin(tf::Vector3(0, 0, 0));
+    q.setW(q_i_cFLU.w());
+    q.setX(q_i_cFLU.x());
+    q.setY(q_i_cFLU.y());
+    q.setZ(q_i_cFLU.z());
+    transform.setRotation(q);
+    br.sendTransform(tf::StampedTransform(
+        transform, header.stamp, "vins_body_imuhz", "vins_cameraFLU"));
+#endif
+
+    
     if (ALIGN_CAMERA_LIDAR_COORDINATE)
     {
+    #if IF_OFFICIAL
         static tf::Transform t_odom_world = tf::Transform(tf::createQuaternionFromRPY(0, 0, M_PI), tf::Vector3(0, 0, 0));
+    #else
+        //? mod: vins_world坐标系和odom坐标系不再绕着Z轴旋转，而是直接对齐
+        static tf::Transform t_odom_world = tf::Transform(tf::createQuaternionFromRPY(0, 0, 0), tf::Vector3(0, 0, 0));
+    #endif
+
         if (header.stamp.toSec() - last_align_time > 1.0)
         {
             try
             {
+            #if IF_OFFICIAL
                 tf::StampedTransform trans_odom_baselink;
                 listener.lookupTransform("odom","base_link", ros::Time(0), trans_odom_baselink);
                 t_odom_world = transformConversion(trans_odom_baselink) * transformConversion(trans_world_vinsbody_ros).inverse();
                 last_align_time = header.stamp.toSec();
-            } 
-            catch (tf::TransformException ex){}
+            #else
+                //; 计算odom坐标系和vins_world之间的变换关系，这个变换是会变化的，因为vins不准确存在漂移，
+                //; 这里就用VINS估计的实时位姿和LIO估计的实时位姿对齐，然后把误差分配到odom和vins_world之间的变换上
+                //; 即T_odom_lidar = T_vinsworld_lidar，其中T_odom_lidar是LIO估计的结果，T_vinsworld_lidar
+                //; 是VINS估计的结果，则T_odom_vinsworld = T_odom_lidar * T_lidar_vinsworld
+                tf::StampedTransform T_odom_lidar;
+                listener.lookupTransform("odom", "base_link", ros::Time(0), T_odom_lidar);
+                tf::Transform t_w_lidar = tf::Transform(q_odom_lidar, tf::Vector3(t_odom_lidar.x(), t_odom_lidar.y(), t_odom_lidar.z()));
+                tf::StampedTransform T_vinsworld_lidar = tf::StampedTransform(
+                    t_w_lidar, header.stamp, "vinsworld", "lidar");
+                //; T_odom_vinsworld = T_odom_lidar * T_vinsworld_lidar.inverse()
+                t_odom_world = transformConversion(T_odom_lidar) * 
+                        transformConversion(T_vinsworld_lidar).inverse();
+                last_align_time = header.stamp.toSec();
+            #endif
+            }
+            catch (tf::TransformException ex)
+            {
+            }
         }
-        br.sendTransform(tf::StampedTransform(t_odom_world, header.stamp, "odom", "vins_world"));
-    } 
+        br.sendTransform(tf::StampedTransform(
+            t_odom_world, header.stamp, "odom", "vins_world"));
+    }
     else
     {
-        tf::Transform t_static = tf::Transform(tf::createQuaternionFromRPY(0, 0, M_PI), tf::Vector3(0, 0, 0));
+
+    #if IF_OFFICIAL
+        static tf::Transform t_static = tf::Transform(tf::createQuaternionFromRPY(0, 0, M_PI), tf::Vector3(0, 0, 0));
+    #else
+        //? mod: vins_world坐标系和odom坐标系不再绕着Z轴旋转，而是直接对齐
+        static tf::Transform t_static = tf::Transform(tf::createQuaternionFromRPY(0, 0, 0), tf::Vector3(0, 0, 0));
+    #endif
+
         br.sendTransform(tf::StampedTransform(t_static, header.stamp, "odom", "vins_world"));
-    }    
+    }
 }
 
 void printStatistics(const Estimator &estimator, double t)
@@ -263,7 +345,6 @@ void pubCameraPose(const Estimator &estimator, const std_msgs::Header &header)
     }
 }
 
-
 void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
 {
     if (pub_point_cloud.getNumSubscribers() != 0)
@@ -283,7 +364,7 @@ void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
                 continue;
             if (it_per_id.start_frame > WINDOW_SIZE * 3.0 / 4.0 || it_per_id.solve_flag != 1)
                 continue;
-            
+
             int imu_i = it_per_id.start_frame;
             Vector3d pts_i = it_per_id.feature_per_frame[0].point * it_per_id.estimated_depth;
             Vector3d w_pts_i = estimator.Rs[imu_i] * (estimator.ric[0] * pts_i + estimator.tic[0]) + estimator.Ps[imu_i];
@@ -303,7 +384,7 @@ void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
         point_cloud.channels.push_back(intensity_channel);
         pub_point_cloud.publish(point_cloud);
     }
-    
+
     // pub margined potin
     if (pub_margin_cloud.getNumSubscribers() != 0)
     {
@@ -315,14 +396,13 @@ void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
         intensity_channel.name = "intensity";
 
         for (auto &it_per_id : estimator.f_manager.feature)
-        { 
+        {
             int used_num;
             used_num = it_per_id.feature_per_frame.size();
             if (!(used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
                 continue;
 
-            if (it_per_id.start_frame == 0 && it_per_id.feature_per_frame.size() <= 2 
-                && it_per_id.solve_flag == 1 )
+            if (it_per_id.start_frame == 0 && it_per_id.feature_per_frame.size() <= 2 && it_per_id.solve_flag == 1)
             {
                 int imu_i = it_per_id.start_frame;
                 Vector3d pts_i = it_per_id.feature_per_frame[0].point * it_per_id.estimated_depth;
@@ -346,10 +426,15 @@ void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
     }
 }
 
-
+/**
+ * @brief 发布估计的TF坐标变换，这个非常重要
+ * 
+ * @param[in] estimator 
+ * @param[in] header 
+ */
 void pubTF(const Estimator &estimator, const std_msgs::Header &header)
 {
-    if( estimator.solver_flag != Estimator::SolverFlag::NON_LINEAR)
+    if (estimator.solver_flag != Estimator::SolverFlag::NON_LINEAR)
         return;
     static tf::TransformBroadcaster br;
     tf::Transform transform;
@@ -366,7 +451,8 @@ void pubTF(const Estimator &estimator, const std_msgs::Header &header)
     q.setY(correct_q.y());
     q.setZ(correct_q.z());
     transform.setRotation(q);
-    br.sendTransform(tf::StampedTransform(transform, header.stamp, "vins_world", "vins_body"));
+    br.sendTransform(tf::StampedTransform(
+        transform, header.stamp, "vins_world", "vins_body"));
 
     // camera frame
     transform.setOrigin(tf::Vector3(estimator.tic[0].x(),
@@ -377,7 +463,8 @@ void pubTF(const Estimator &estimator, const std_msgs::Header &header)
     q.setY(Quaterniond(estimator.ric[0]).y());
     q.setZ(Quaterniond(estimator.ric[0]).z());
     transform.setRotation(q);
-    br.sendTransform(tf::StampedTransform(transform, header.stamp, "vins_body", "vins_camera"));
+    br.sendTransform(tf::StampedTransform(
+        transform, header.stamp, "vins_body", "vins_camera"));
 
     nav_msgs::Odometry odometry;
     odometry.header = header;
@@ -419,19 +506,17 @@ void pubKeyframe(const Estimator &estimator)
 
         pub_keyframe_pose.publish(odometry);
 
-
         sensor_msgs::PointCloud point_cloud;
         point_cloud.header = estimator.Headers[WINDOW_SIZE - 2];
         for (auto &it_per_id : estimator.f_manager.feature)
         {
             int frame_size = it_per_id.feature_per_frame.size();
-            if(it_per_id.start_frame < WINDOW_SIZE - 2 && it_per_id.start_frame + frame_size - 1 >= WINDOW_SIZE - 2 && it_per_id.solve_flag == 1)
+            if (it_per_id.start_frame < WINDOW_SIZE - 2 && it_per_id.start_frame + frame_size - 1 >= WINDOW_SIZE - 2 && it_per_id.solve_flag == 1)
             {
 
                 int imu_i = it_per_id.start_frame;
                 Vector3d pts_i = it_per_id.feature_per_frame[0].point * it_per_id.estimated_depth;
-                Vector3d w_pts_i = estimator.Rs[imu_i] * (estimator.ric[0] * pts_i + estimator.tic[0])
-                                      + estimator.Ps[imu_i];
+                Vector3d w_pts_i = estimator.Rs[imu_i] * (estimator.ric[0] * pts_i + estimator.tic[0]) + estimator.Ps[imu_i];
                 geometry_msgs::Point32 p;
                 p.x = w_pts_i(0);
                 p.y = w_pts_i(1);

@@ -170,7 +170,7 @@ void KeyFrame::PnPRANSAC(const vector<cv::Point2f> &matched_2d_old_norm,
 }
 
 
-bool KeyFrame::findConnection(KeyFrame* old_kf) // 回环帧验证函数
+bool KeyFrame::findConnection(KeyFrame* old_kf)
 {
 	vector<cv::Point2f> matched_2d_cur, matched_2d_old;
 	vector<cv::Point2f> matched_2d_cur_norm, matched_2d_old_norm;
@@ -178,16 +178,13 @@ bool KeyFrame::findConnection(KeyFrame* old_kf) // 回环帧验证函数
 	vector<double> matched_id;
 	vector<uchar> status;
 
-    // 提取this关键帧信息
 	matched_3d = point_3d;
 	matched_2d_cur = point_2d_uv;
 	matched_2d_cur_norm = point_2d_norm;
 	matched_id = point_id;
 
-    // 搜索this关键帧的window_keypoints中，与参数帧汉明距离足够小的关键点，放到old和old_norm中，没找到的也要占位
 	searchByBRIEFDes(matched_2d_old, matched_2d_old_norm, status, old_kf->brief_descriptors, old_kf->keypoints, old_kf->keypoints_norm);
-	// 删除那些没有找到相似点的点对
-    reduceVector(matched_2d_cur, status);
+	reduceVector(matched_2d_cur, status);
 	reduceVector(matched_2d_old, status);
 	reduceVector(matched_2d_cur_norm, status);
 	reduceVector(matched_2d_old_norm, status);
@@ -197,7 +194,6 @@ bool KeyFrame::findConnection(KeyFrame* old_kf) // 回环帧验证函数
 	if ((int)matched_2d_cur.size() > MIN_LOOP_NUM)
 	{
 		status.clear();
-        // PnP+RANSAC筛选内点，即用某个位姿重投影误差较小的关键点
 	    PnPRANSAC(matched_2d_old_norm, matched_3d, status);
 	    reduceVector(matched_2d_cur, status);
 	    reduceVector(matched_2d_old, status);
@@ -208,7 +204,6 @@ bool KeyFrame::findConnection(KeyFrame* old_kf) // 回环帧验证函数
 
         if ((int)matched_2d_cur.size() > MIN_LOOP_NUM)
         {
-            // 可视化
         	if (pub_match_img.getNumSubscribers() != 0)
             {
             	int gap = 10;
@@ -253,7 +248,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf) // 回环帧验证函数
                 msg->header.stamp = ros::Time(time_stamp);
     	    	pub_match_img.publish(msg);
             }
-            // 描述子筛选，PnP筛选后，内点数量足够，则认为是回环帧
+
             return true;
         }
 	}

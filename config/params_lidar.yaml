@@ -27,10 +27,23 @@ lvi_sam:
   imuGyrBiasN: 3.5640318696367613e-05
   imuGravity: 9.80511
   
-  # Extrinsics (lidar -> IMU)
-  extrinsicTrans: [0.0, 0.0, 0.0]
-  extrinsicRot: [-1, 0, 0, 0, 1, 0, 0, 0, -1]
-  extrinsicRPY: [0, 1, 0, -1, 0, 0, 0, 0, 1]
+  
+  ###################### extrinsic between IMU and LiDAR  ###########################
+  ###################### T_IMU_LiDAR, LiDAR -> IMU       ############################
+  extrinsicTranslation: [0.0, 0.0, 0.0]    
+  extrinsicRotation: [-1,  0,  0, 
+                      0,   1,  0, 
+                      0,   0,  -1]
+
+  ########################## IMU property config  ###########################
+  ## 对绝大多数IMU来说，下面三个值分别是"+z", "+y", "+x" (for most of IMUs, the following config is "+z", "+y", "+x")
+  # 绕着哪个轴逆时针转动，输出yaw角度为正(which axis the IMU rotates around counterclockwise to get a positive yaw angle)
+  yawAxis: "-z"  
+  # 绕着哪个轴逆时针转动，输出pitch角度为正(which axis the IMU rotates around counterclockwise to get a positive pitch angle)
+  pitchAxis: "+x"    
+  # 绕着哪个轴逆时针转动，输出roll角度为正(which axis the IMU rotates around counterclockwise to get a positive roll angle)
+  rollAxis: "+y"
+
 
   # LOAM feature threshold
   edgeThreshold: 1.0

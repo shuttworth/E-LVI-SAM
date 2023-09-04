@@ -13,13 +13,6 @@ use_lidar: 1                     # whether use depth info from lidar or not
 lidar_skip: 3                    # skip this amount of scans
 align_camera_lidar_estimation: 1 # align camera and lidar estimation for visualization
 
-# lidar to camera extrinsic
-lidar_to_cam_tx: 0.05
-lidar_to_cam_ty: -0.07
-lidar_to_cam_tz: -0.07
-lidar_to_cam_rx: 0.0
-lidar_to_cam_ry: 0.0
-lidar_to_cam_rz: -0.04
 
 # camera model
 model_type: MEI
@@ -49,6 +42,9 @@ acc_w: 0.002        # accelerometer bias random work noise standard deviation.
 gyr_w: 4.0e-5       # gyroscope bias random work noise standard deviation.
 g_norm: 9.805       #
 
+
+###################### extrinsic between IMU and Camera  ###########################
+###################### T_IMU_Camera, Camera -> IMU       ###########################
 # Extrinsic parameter between IMU and Camera.
 estimate_extrinsic: 0   # 0  Have an accurate extrinsic parameters. We will trust the following imu^R_cam, imu^T_cam, don't change it.
                         # 1  Have an initial guess about extrinsic parameters. We will optimize around your initial guess.
@@ -59,15 +55,15 @@ extrinsicRotation: !!opencv-matrix
    cols: 3
    dt: d
    data: [ 0, 0, -1, 
-           -1, 0, 0, 
+          -1, 0, 0, 
            0, 1, 0]
-
 #Translation from camera frame to imu frame, imu^T_cam
 extrinsicTranslation: !!opencv-matrix
    rows: 3
    cols: 1
    dt: d
    data: [0.006422381632411965, 0.019939800449065116, 0.03364235163589248]
+
 
 #feature traker paprameters
 max_cnt: 150            # max feature number in feature tracking

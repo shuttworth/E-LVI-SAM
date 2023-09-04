@@ -28,12 +28,20 @@ int USE_LIDAR;
 int ALIGN_CAMERA_LIDAR_COORDINATE;
 
 
+#if IF_OFFICIAL
+
+#else
+//? add: 从params_lidar.yaml中读取的参数
+Eigen::Matrix3d R_imu_lidar = Eigen::Matrix3d::Identity(); 
+Eigen::Vector3d t_imu_lidar = Eigen::Vector3d::Zero();
+#endif
+
 void readParameters(ros::NodeHandle &n)
 {
     std::string config_file;
     n.getParam("vins_config_file", config_file);
     cv::FileStorage fsSettings(config_file, cv::FileStorage::READ);
-    if(!fsSettings.isOpened())
+    if (!fsSettings.isOpened())
     {
         std::cerr << "ERROR: Wrong path to settings" << std::endl;
     }
@@ -67,11 +75,10 @@ void readParameters(ros::NodeHandle &n)
         RIC.push_back(Eigen::Matrix3d::Identity());
         TIC.push_back(Eigen::Vector3d::Zero());
         EX_CALIB_RESULT_PATH = pkg_path + "/config/extrinsic_parameter.csv";
-
     }
-    else 
+    else
     {
-        if ( ESTIMATE_EXTRINSIC == 1)
+        if (ESTIMATE_EXTRINSIC == 1)
         {
             ROS_INFO(" Optimize extrinsic param around initial guess!");
             EX_CALIB_RESULT_PATH = pkg_path + "/config/extrinsic_parameter.csv";
@@ -90,10 +97,11 @@ void readParameters(ros::NodeHandle &n)
         eigen_R = Q.normalized();
         RIC.push_back(eigen_R);
         TIC.push_back(eigen_T);
-        ROS_INFO_STREAM("Extrinsic_R : " << std::endl << RIC[0]);
-        ROS_INFO_STREAM("Extrinsic_T : " << std::endl << TIC[0].transpose());
-        
-    } 
+        ROS_INFO_STREAM("Extrinsic_R : " << std::endl
+                                         << RIC[0]);
+        ROS_INFO_STREAM("Extrinsic_T : " << std::endl
+                                         << TIC[0].transpose());
+    }
 
     INIT_DEPTH = 5.0;
     BIAS_ACC_THRESHOLD = 0.1;
@@ -116,7 +124,27 @@ void readParameters(ros::NodeHandle &n)
     {
         TR = 0;
     }
-    
+
     fsSettings.release();
+
+#if IF_OFFICIAL
+
+#else
+    //? add: 读取params_lidar.yaml中的参数
+    std::vector<double> t_imu_lidar_V;
+    std::vector<double> R_imu_lidar_V;
+    n.param<std::vector<double>>(PROJECT_NAME+ "/extrinsicTranslation", t_imu_lidar_V, std::vector<double>());
+    n.param<std::vector<double>>(PROJECT_NAME+ "/extrinsicRotation", R_imu_lidar_V, std::vector<double>());
+    t_imu_lidar = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(t_imu_lidar_V.data(), 3, 1);
+    Eigen::Matrix3d R_tmp = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(R_imu_lidar_V.data(), 3, 3);
+    ROS_ASSERT(abs(R_tmp.determinant()) > 0.9);   // 防止配置文件中写错，这里加一个断言判断一下
+    R_imu_lidar = Eigen::Quaterniond(R_tmp).normalized().toRotationMatrix();
+    
+    ROS_WARN_STREAM("=vins-estimator read R_imu_lidar : =====================");
+    std::cout << R_imu_lidar << std::endl;
+    ROS_WARN_STREAM("=vins-estimator read t_imu_lidar : =====================");
+    std::cout << t_imu_lidar.transpose() << std::endl;
+#endif
+
     usleep(100);
 }

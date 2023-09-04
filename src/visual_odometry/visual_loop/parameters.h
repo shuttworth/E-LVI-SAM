@@ -96,17 +96,16 @@ class BriefExtractor
 {
 public:
 
-    DVision::BRIEF m_brief; // 复合BRIEF，用于调用方法
+    DVision::BRIEF m_brief;
 
     virtual void operator()(const cv::Mat &im, vector<cv::KeyPoint> &keys, vector<DVision::BRIEF::bitset> &descriptors) const
-    // 重载()操作符，用来计算图片上指定关键点的描述子
     {
         m_brief.compute(im, keys, descriptors);
     }
 
     BriefExtractor(){};
 
-    BriefExtractor(const std::string &pattern_file) // 载入BRIEF描述子计算pattern
+    BriefExtractor(const std::string &pattern_file)
     {
         // The DVision::BRIEF extractor computes a random pattern by default when
         // the object is created.

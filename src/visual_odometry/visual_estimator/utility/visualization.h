@@ -33,7 +33,9 @@ void registerPub(ros::NodeHandle &n);
 
 tf::Transform transformConversion(const tf::StampedTransform& t);
 
-void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, const Eigen::Vector3d &V, const std_msgs::Header &header, const int &failureId);
+void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, 
+    const Eigen::Vector3d &V, const std_msgs::Header &header, const int &failureId, 
+    const Eigen::Vector3d &t_ic, const Eigen::Quaterniond &q_ic);
 
 void printStatistics(const Estimator &estimator, double t);
 

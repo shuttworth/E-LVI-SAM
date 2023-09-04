@@ -88,6 +88,14 @@ extern double ROW, COL;
 extern int USE_LIDAR;
 extern int ALIGN_CAMERA_LIDAR_COORDINATE;
 
+#if IF_OFFICIAL
+
+#else
+//? add: 从params_lidar.yaml中读取的参数
+extern Eigen::Matrix3d R_imu_lidar;  //; R_lidar_imu, 即IMU -> LiDAR的旋转
+extern Eigen::Vector3d t_imu_lidar;
+#endif
+
 void readParameters(ros::NodeHandle &n);
 
 enum SIZE_PARAMETERIZATION

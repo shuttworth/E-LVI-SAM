@@ -94,7 +94,7 @@ class Estimator
     int frame_count;
     int sum_of_outlier, sum_of_back, sum_of_front, sum_of_invalid;
 
-    FeatureManager f_manager;   // 特征点管理器
+    FeatureManager f_manager;
     MotionEstimator m_estimator;
     InitialEXRotation initial_ex_rotation;
 
@@ -121,7 +121,7 @@ class Estimator
     MarginalizationInfo *last_marginalization_info;
     vector<double *> last_marginalization_parameter_blocks;
 
-    map<double, ImageFrame> all_image_frame;    // <图像帧的时间戳， ImageFrame>
+    map<double, ImageFrame> all_image_frame;
     IntegrationBase *tmp_pre_integration;
 
     int failureCount;
