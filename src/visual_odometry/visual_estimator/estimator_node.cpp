@@ -202,6 +202,7 @@ void feature_callback(const sensor_msgs::PointCloudConstPtr &feature_msg)
     m_buf.lock();
     feature_buf.push(feature_msg);
     m_buf.unlock();
+    // 唤醒条件变量con，继续执行process
     con.notify_one();
 }
 
@@ -293,7 +294,7 @@ void process()
                     rz = w1 * rz + w2 * imu_msg->angular_velocity.z;
                     // 预积分计算状态[P,V,Q]
                     estimator.processIMU(dt_1, Vector3d(dx, dy, dz), Vector3d(rx, ry, rz));
-                    // printf("dimu: dt:%f a: %f %f %f w: %f %f %f\n",dt_1, dx, dy, dz, rx, ry, rz);
+                    //// printf("dimu: dt:%f a: %f %f %f w: %f %f %f\n",dt_1, dx, dy, dz, rx, ry, rz);
                 }
             }
 
@@ -332,6 +333,7 @@ void process()
             m_odom.unlock();
 
             // VIO处理图片获取位姿：初始化/非线性优化
+            // 传入的参数image(当前帧观测到的所有路标点)：map< 关键点ID, vector< pair<相机ID, x,y,z,u,v,vel_x,vel_y,depth >>>
             estimator.processImage(image, initialization_info, img_msg->header);
             //// double whole_t = t_s.toc();
             //// printStatistics(estimator, whole_t);

@@ -16,9 +16,9 @@
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam_unstable/nonlinear/IncrementalFixedLagSmoother.h>
 
-using gtsam::symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
-using gtsam::symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using gtsam::symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
+using gtsam::symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
+using gtsam::symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 
 class TransformFusion : public ParamServer
 {
@@ -157,7 +157,6 @@ public:
 class IMUPreintegration : public ParamServer
 {
 public:
-
     std::mutex mtx;
 
     ros::Subscriber subImu;
@@ -172,7 +171,6 @@ public:
     gtsam::noiseModel::Diagonal::shared_ptr correctionNoise;
     gtsam::noiseModel::Diagonal::shared_ptr correctionNoise2;
     gtsam::Vector noiseModelBetweenBias;
-
 
     gtsam::PreintegratedImuMeasurements *imuIntegratorOpt_;
     gtsam::PreintegratedImuMeasurements *imuIntegratorImu_;
@@ -219,19 +217,23 @@ public:
     gtsam::Pose3 lidar2Imu = gtsam::Pose3(gtsam::Rot3(1, 0, 0, 0), gtsam::Point3(-t_imulidar_lidar.x(), -t_imulidar_lidar.y(), -t_imulidar_lidar.z()));
 #endif
 
-    IMUPreintegration()
+    IMUPreintegration() // 构造函数
     {
+        // 订阅IMU原始测量和mapping后的Odom话题
         subImu = nh.subscribe<sensor_msgs::Imu>(imuTopic, 2000, &IMUPreintegration::imuHandler, this, ros::TransportHints().tcpNoDelay());
         subOdometry = nh.subscribe<nav_msgs::Odometry>(PROJECT_NAME + "/lidar/mapping/odometry_incremental", 5, &IMUPreintegration::odometryHandler, this, ros::TransportHints().tcpNoDelay());
 
+        // 发布IMU预积分odom话题和IMU位移可视化话题
         pubImuOdometry = nh.advertise<nav_msgs::Odometry>(odomTopic + "_incremental", 2000);
 
+        // 设置IMU的参数：提前标定的加速度协方差，陀螺仪协方差，积分协方差，零偏
         boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(imuGravity);
         p->accelerometerCovariance = gtsam::Matrix33::Identity(3, 3) * pow(imuAccNoise, 2); // acc white noise in continuous
         p->gyroscopeCovariance = gtsam::Matrix33::Identity(3, 3) * pow(imuGyrNoise, 2);     // gyro white noise in continuous
         p->integrationCovariance = gtsam::Matrix33::Identity(3, 3) * pow(1e-4, 2);          // error committed in integrating position from velocities
         gtsam::imuBias::ConstantBias prior_imu_bias((gtsam::Vector(6) << 0, 0, 0, 0, 0, 0).finished());
 
+        // 设置包含零偏的噪声模型：位姿噪声，速度噪声，零偏噪声
         priorPoseNoise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2).finished()); // rad,rad,rad,m, m, m
         priorVelNoise = gtsam::noiseModel::Isotropic::Sigma(3, 1e4);                                                               // m/s
         priorBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);                                                             // 1e-2 ~ 1e-3 seems to be good
@@ -239,6 +241,7 @@ public:
         correctionNoise2 = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1, 1, 1, 1, 1, 1).finished());                 // rad,rad,rad,m, m, m
         noiseModelBetweenBias = (gtsam::Vector(6) << imuAccBiasN, imuAccBiasN, imuAccBiasN, imuGyrBiasN, imuGyrBiasN, imuGyrBiasN).finished();
 
+        // 初始化预积分器
         imuIntegratorImu_ = new gtsam::PreintegratedImuMeasurements(p, prior_imu_bias); // setting up the IMU integration for IMU message thread
         imuIntegratorOpt_ = new gtsam::PreintegratedImuMeasurements(p, prior_imu_bias); // setting up the IMU integration for optimization
     }
@@ -517,9 +520,9 @@ public:
         odometry.twist.twist.angular.x = thisImu.angular_velocity.x + prevBiasOdom.gyroscope().x();
         odometry.twist.twist.angular.y = thisImu.angular_velocity.y + prevBiasOdom.gyroscope().y();
         odometry.twist.twist.angular.z = thisImu.angular_velocity.z + prevBiasOdom.gyroscope().z();
-        
+
         // information for VINS initialization
-        odometry.pose.covariance[0] = double(imuPreintegrationResetId);  //; IMU 预积分复位id
+        odometry.pose.covariance[0] = double(imuPreintegrationResetId); //; IMU 预积分复位id
         odometry.pose.covariance[1] = prevBiasOdom.accelerometer().x();
         odometry.pose.covariance[2] = prevBiasOdom.accelerometer().y();
         odometry.pose.covariance[3] = prevBiasOdom.accelerometer().z();
@@ -535,6 +538,7 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "lvi_sam");
 
+    // 利用IMUPreintegration类构造函数完成订阅、处理、发布
     IMUPreintegration ImuP;
 
     TransformFusion TF;

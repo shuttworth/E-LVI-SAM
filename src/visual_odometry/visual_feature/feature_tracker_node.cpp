@@ -382,12 +382,14 @@ int main(int argc, char **argv)
     depthRegister = new DepthRegister(n);
     
     // subscriber to image and lidar
+    // 订阅原始图片话题image_raw、去畸变点云话题cloud_deskewed
     ros::Subscriber sub_img   = n.subscribe(IMAGE_TOPIC,       5,    img_callback);
     ros::Subscriber sub_lidar = n.subscribe(POINT_CLOUD_TOPIC, 5,    lidar_callback);
     if (!USE_LIDAR)
         sub_lidar.shutdown();
 
     // messages to vins estimator
+    // 发布了三个话题HH
     pub_feature = n.advertise<sensor_msgs::PointCloud>(PROJECT_NAME + "/vins/feature/feature",     5);
     pub_match   = n.advertise<sensor_msgs::Image>     (PROJECT_NAME + "/vins/feature/feature_img", 5);
     pub_restart = n.advertise<std_msgs::Bool>         (PROJECT_NAME + "/vins/feature/restart",     5);

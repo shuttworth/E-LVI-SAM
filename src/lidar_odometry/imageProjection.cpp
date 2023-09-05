@@ -85,20 +85,26 @@ private:
     vector<int> columnIdnCountVec;
 
 public:
-    ImageProjection() : deskewFlag(0)
+    ImageProjection() : deskewFlag(0) // 去畸变标志位 为零
     {
+        // 订阅imu原始数据，回调函数负责将测量信息坐标变换到激光雷达并存储到队列
         subImu = nh.subscribe<sensor_msgs::Imu>(imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
-        //! 重要：VIO发来的里程计消息，会作为后端点云配准的位姿初值
+        // ! 重要：VIO发来的里程计消息，会作为后端点云配准的位姿初值
+        // 订阅Odom原始数据，此Odom来自于VIS，可能早于点云采集时间，也可能稍晚于点云采集时间，回调函数负责将位姿信息存放到队列
         subVinsOdom = nh.subscribe<nav_msgs::Odometry>(PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 2000, &ImageProjection::vinsOdometryHandler, this, ros::TransportHints().tcpNoDelay());
         subImuOdom = nh.subscribe<nav_msgs::Odometry>(odomTopic + "_incremental", 2000, &ImageProjection::imuOdometryHandler, this, ros::TransportHints().tcpNoDelay());
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
+        // 订阅原始点云，回调函数负责检查、获取对齐的imu帧旋转矩阵、获取相邻帧的位姿变换、点云投影成图片从而使点云有序化，最后把去畸变有序化点云和自定义格式点云发布出去
 
+        // 发布处理过后的点云和自定义格式的点云
         pubExtractedCloud = nh.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/lidar/deskew/cloud_deskewed", 5);
         pubLaserCloudInfo = nh.advertise<lvi_sam::cloud_info>(PROJECT_NAME + "/lidar/deskew/cloud_info", 5);
 
+        // 为下一次处理分配内存空间并重置所有参数
         allocateMemory();
         resetParameters();
 
+        // 设置控制台输出信息
         pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     }
 
@@ -272,7 +278,7 @@ public:
     bool deskewInfo()
     {
         std::lock_guard<std::mutex> lock1(imuLock);
-       
+
         // make sure IMU data available for the scan
         if (imuQueue.empty() || imuQueue.front().header.stamp.toSec() > timeScanCur || imuQueue.back().header.stamp.toSec() < timeScanEnd)
         {
@@ -292,7 +298,7 @@ public:
             std::lock_guard<std::mutex> lock2(imuOdomLock);
             imuOdomDeskewInfo();
         }
-        
+
         return true;
     }
 
@@ -493,7 +499,7 @@ public:
             cloudInfo.imuOdomAvailable = true;
         }
 
-        //? add: 同理，如果vins odom的增量平移变换不可用，则寻找imu odom的增量平移变换        
+        //? add: 同理，如果vins odom的增量平移变换不可用，则寻找imu odom的增量平移变换
         if (odomDeskewFlag == false)
         {
             // get end odometry at the end of the scan
@@ -571,7 +577,7 @@ public:
         // If the sensor moves relatively slow, like walking speed, positional deskew seems to have little benefits. Thus code below is commented.
 
         //? add: 打开去平移畸变，因为对于自动驾驶场景来说，高速状态下平移还是比较大的
-        if(transDeskew)
+        if (transDeskew)
         {
             if (cloudInfo.vinsOdomAvailable == false || cloudInfo.imuOdomAvailable == false || odomDeskewFlag == false)
                 return;
@@ -707,11 +713,13 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "lvi_sam");
 
+    // 本node的主要工作都体现在ImageProjection的构造函数当中
     ImageProjection IP;
 
     ROS_INFO("\033[1;32m----> Lidar Cloud Deskew Started.\033[0m");
 
     ros::MultiThreadedSpinner spinner(3);
+    // 创建三个相同的线程，在A线程忙碌的时候启用B线程，A,B线程都忙碌的时候启用C线程
     spinner.spin();
 
     return 0;

@@ -19,20 +19,20 @@ model_type: MEI
 camera_name: camera
 
 # Mono camera config
-image_width: 720
-image_height: 540
+image_width: 720  # 图像宽度
+image_height: 540  # 图像高度
 mirror_parameters:
    xi: 1.9926618269451453
-distortion_parameters:
-   k1: -0.0399258932468764
-   k2: 0.15160828121223818
-   p1: 0.00017756967825777937
-   p2: -0.0011531239076798612
+distortion_parameters:  # 畸变参数
+   k1: -0.0399258932468764  # 径向畸变系数
+   k2: 0.15160828121223818  # 径向畸变系数
+   p1: 0.00017756967825777937  # 切向畸变系数
+   p2: -0.0011531239076798612  # 切向畸变系
 projection_parameters:
    gamma1: 669.8940458885896
    gamma2: 669.1450614220616
-   u0: 377.9459252967363
-   v0: 279.63655686698144
+   u0: 377.9459252967363  # 像素系上的主点坐标
+   v0: 279.63655686698144  # 像素系上的主点坐标
 fisheye_mask: "/config/fisheye_mask_720x540.jpg"
 
 #imu parameters       The more accurate parameters you provide, the worse performance

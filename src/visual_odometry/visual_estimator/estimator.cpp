@@ -125,11 +125,12 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
                              const vector<float> &lidar_initialization_info,
                              const std_msgs::Header &header)
 {
+    // f_manager是FeatureManager Class的一个量，内部可看
+    // Add new image features
+    if (f_manager.addFeatureCheckParallax(frame_count, image, td))
     // 根据平均视差（优秀旧特征总视差/优秀旧特征数量）确定是边缘化旧帧还是边缘化次新帧
     // 如果平均视差小，说明当前帧的移动距离较小，不够作为新关键帧，应当边缘化上一帧，
     // 反之说明平均视差大说明当前帧有资格作为新关键帧，应当边缘化窗口最旧的帧。
-    // Add new image features
-    if (f_manager.addFeatureCheckParallax(frame_count, image, td))
         marginalization_flag = MARGIN_OLD;
     else
         marginalization_flag = MARGIN_SECOND_NEW;
@@ -173,6 +174,8 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         }
     }
 
+    // 以上的内容为初始化阶段的前期处理，概括为：添加新的特征、计算平均视差选择边缘化策略、是否有Lidar位姿辅助
+    // 以下的内容为初始化阶段的核心内容，核心函数：initialStructure()、
     if (solver_flag == INITIAL)
     {
         // 滑动窗口满了才能进行初始化
@@ -224,7 +227,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         }
 
         slideWindow(); // 根据之前的视差滑动窗口
-        //根据计算的位姿对匹配点进行重投影，将重投影误差较大的点去除； 剔除求解失败的，即质量差的特征
+        // 根据计算的位姿对匹配点进行重投影，将重投影误差较大的点去除； 剔除求解失败的，即质量差的特征
         f_manager.removeFailures();
 
         // prepare output of VINS
@@ -248,7 +251,7 @@ bool Estimator::initialStructure()
         for (map<double, ImageFrame>::iterator frame_it = all_image_frame.begin(); frame_it != all_image_frame.end(); frame_it++)
             frame_it->second.is_key_frame = false;
 
-        // check if lidar info in the window is valid 
+        // check if lidar info in the window is valid
         // 必须窗口内的lidar信息全都可用
         for (int i = 0; i <= WINDOW_SIZE; i++)
         {

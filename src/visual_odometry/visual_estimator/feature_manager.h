@@ -17,6 +17,7 @@ using namespace Eigen;
 
 class FeaturePerFrame
 {
+  // 每个路标点在一张图像中的信息
   public:
     FeaturePerFrame(const Eigen::Matrix<double, 8, 1> &_point, double td)
     {
@@ -48,6 +49,7 @@ class FeaturePerId
   public:
     const int feature_id;
     int start_frame;
+    // 多个路标点由多个连续的图像观测到
     vector<FeaturePerFrame> feature_per_frame;
 
     int used_num;
@@ -103,6 +105,7 @@ class FeatureManager
     void removeBack();
     void removeFront(int frame_count);
     void removeOutlier();
+    // 滑窗内所有路标点
     list<FeaturePerId> feature;
     int last_track_num;
 
