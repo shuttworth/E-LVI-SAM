@@ -379,6 +379,7 @@ int main(int argc, char **argv)
     }
 
     // initialize depthRegister (after readParameters())
+    // 初始化深度注册器，用ros node注册
     depthRegister = new DepthRegister(n);
     
     // subscriber to image and lidar
