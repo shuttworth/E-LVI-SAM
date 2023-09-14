@@ -97,6 +97,7 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const
     if (frame_count != 0)
     {
         // 导入imu测量和时间间隔dt到各个容器
+        // 函数重载:push_back(dt,linear_acceleration, angular_velocity)
         pre_integrations[frame_count]->push_back(dt, linear_acceleration, angular_velocity);
 
         tmp_pre_integration->push_back(dt, linear_acceleration, angular_velocity);

@@ -14,18 +14,18 @@ class IntegrationBase
 {
   public:
 
-    double dt;
-    Eigen::Vector3d acc_0, gyr_0;
-    Eigen::Vector3d acc_1, gyr_1;
+    double dt; // IMU测量的时间间隔
+    Eigen::Vector3d acc_0, gyr_0; // 前一帧的加速度、角速度测量
+    Eigen::Vector3d acc_1, gyr_1; // 当前帧的加速度、角速度测量
 
-    const Eigen::Vector3d linearized_acc, linearized_gyr;
-    Eigen::Vector3d linearized_ba, linearized_bg;
+    const Eigen::Vector3d linearized_acc, linearized_gyr; // 线性化的加速度、角速度
+    Eigen::Vector3d linearized_ba, linearized_bg; // 线性化的加速计bias、角速度计bias
 
-    Eigen::Matrix<double, 15, 15> jacobian;
-    Eigen::Matrix<double, 15, 15> covariance;
-    Eigen::Matrix<double, 18, 18> noise;
+    Eigen::Matrix<double, 15, 15> jacobian; // IMU雅可比矩阵，用于重新传播预积分值
+    Eigen::Matrix<double, 15, 15> covariance; // IMU协方差
+    Eigen::Matrix<double, 18, 18> noise; // IMU测量噪声，可用于计算IMU协方差
 
-    double sum_dt;
+    double sum_dt; // 两图片帧之间的总时间间隔
     Eigen::Vector3d delta_p;
     Eigen::Quaterniond delta_q;
     Eigen::Vector3d delta_v;

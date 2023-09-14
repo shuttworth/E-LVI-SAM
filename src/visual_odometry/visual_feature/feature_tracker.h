@@ -91,12 +91,14 @@ public:
             pointsArray[i].resize(num_bins);
     }
 
+    // DepthRegister中最重要的函数
     sensor_msgs::ChannelFloat32 get_depth(const ros::Time &stamp_cur, const cv::Mat &imageCur,
                                           const pcl::PointCloud<PointType>::Ptr &depthCloud,
                                           const camodocal::CameraPtr &camera_model,
                                           const vector<geometry_msgs::Point32> &features_2d)
     {
         // 0.1 initialize depth for return
+        // 初始化深度值通道
         sensor_msgs::ChannelFloat32 depth_of_point;
         depth_of_point.name = "depth";
         depth_of_point.values.resize(features_2d.size(), -1);
@@ -106,6 +108,7 @@ public:
             return depth_of_point;
 
         // 0.3 look up transform at current image time
+        // 收听tf广播
         try
         {
 
@@ -133,11 +136,12 @@ public:
         Eigen::Affine3f transNow = pcl::getTransformation(xCur, yCur, zCur, rollCur, pitchCur, yawCur);
 
         // 0.4 transform cloud from global frame to camera frame
+        // 这里就是把vins_world坐标系下的点云，转到了camera的FLU坐标系下
         pcl::PointCloud<PointType>::Ptr depth_cloud_local(new pcl::PointCloud<PointType>());
-        //; 这里就是把vins_world坐标系下的点云，转到了camera的FLU坐标系下
         pcl::transformPointCloud(*depthCloud, *depth_cloud_local, transNow.inverse());
 
         // 0.5 project undistorted normalized (z) 2d features onto a unit sphere
+        // 把2d关键点投影到球坐标系，并做坐标变换
         pcl::PointCloud<PointType>::Ptr features_3d_sphere(new pcl::PointCloud<PointType>());
         for (int i = 0; i < (int)features_2d.size(); ++i)
         {
@@ -154,6 +158,8 @@ public:
         }
 
         // 3. project depth cloud on a range image, filter points satcked in the same region
+        // 筛选在相机FoV以内的，距离相机近的点云点，用来构建用于搜索关键点深度的点云
+        // 点云投影图分辨率
         float bin_res = 180.0 / (float)num_bins; // currently only cover the space in front of lidar (-90 ~ 90)
         cv::Mat rangeImage = cv::Mat(num_bins, num_bins, CV_32F, cv::Scalar::all(FLT_MAX));
 
@@ -163,6 +169,7 @@ public:
             // filter points not in camera view
             if (p.x < 0 || abs(p.y / p.x) > 10 || abs(p.z / p.x) > 10)
                 continue;
+            // 排除相机FoV以外的点
             // find row id in range image
             float row_angle = atan2(p.z, sqrt(p.x * p.x + p.y * p.y)) * 180.0 / M_PI + 90.0; // degrees, bottom -> up, 0 -> 360
             int row_id = round(row_angle / bin_res);
@@ -182,6 +189,7 @@ public:
         }
 
         // 4. extract downsampled depth cloud from range image
+        // 构建用于搜索关键点深度的点云并发布
         pcl::PointCloud<PointType>::Ptr depth_cloud_local_filter2(new pcl::PointCloud<PointType>());
         for (int i = 0; i < num_bins; ++i)
         {
@@ -201,6 +209,7 @@ public:
 #endif
 
         // 5. project depth cloud onto a unit sphere
+        // 把上面的点云投影到单位球球面，intensity保存距离信息
         pcl::PointCloud<PointType>::Ptr depth_cloud_unit_sphere(new pcl::PointCloud<PointType>());
         for (int i = 0; i < (int)depth_cloud_local->size(); ++i)
         {
@@ -220,12 +229,14 @@ public:
         kdtree->setInputCloud(depth_cloud_unit_sphere);
 
         // 7. find the feature depth using kd-tree
+        // kdtree搜索与关键点球面最近的三个点
         vector<int> pointSearchInd;
         vector<float> pointSearchSqDis;
         float dist_sq_threshold = pow(sin(bin_res / 180.0 * M_PI) * 5.0, 2);
         for (int i = 0; i < (int)features_3d_sphere->size(); ++i)
         {
             kdtree->nearestKSearch(features_3d_sphere->points[i], 3, pointSearchInd, pointSearchSqDis);
+            // 保证有三个点并且最远距离仍不超过阈值
             if (pointSearchInd.size() == 3 && pointSearchSqDis[2] < dist_sq_threshold)
             {
                 float r1 = depth_cloud_unit_sphere->points[pointSearchInd[0]].intensity;

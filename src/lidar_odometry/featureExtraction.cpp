@@ -73,16 +73,21 @@ public:
 
     void laserCloudInfoHandler(const lvi_sam::cloud_infoConstPtr &msgIn)
     {
+        // 1、预处理：点云格
         cloudInfo = *msgIn;                                      // new cloud info
         cloudHeader = msgIn->header;                             // new cloud header
         pcl::fromROSMsg(msgIn->cloud_deskewed, *extractedCloud); // new cloud for extraction
 
+        // 2、计算点云中各点曲率，为提取特征点
         calculateSmoothness();
 
+        // 3、屏蔽点云中被遮挡点或平行
         markOccludedPoints();
 
+        // 4、依据曲率，提取角特征和面特征
         extractFeatures();
 
+        // 5、向后续节点发布提取到的角特征和面特征
         publishFeatureCloud();
     }
 
@@ -94,10 +99,22 @@ public:
             // 采用距离来计算曲率，这是对之前imageProjection节点计算过的距离信息再次利用，提高信息利用率和计算效率
             float diffRange = cloudInfo.pointRange[i - 5] + cloudInfo.pointRange[i - 4] + cloudInfo.pointRange[i - 3] + cloudInfo.pointRange[i - 2] + cloudInfo.pointRange[i - 1] - cloudInfo.pointRange[i] * 10 + cloudInfo.pointRange[i + 1] + cloudInfo.pointRange[i + 2] + cloudInfo.pointRange[i + 3] + cloudInfo.pointRange[i + 4] + cloudInfo.pointRange[i + 5];
 
+            // 曲率采用距离的平方的
             cloudCurvature[i] = diffRange * diffRange; // diffX * diffX + diffY * diffY + diffZ * diffZ;
 
+            //  计算特征点的标记位
+            // 1:表示不参与提取特征点，可能受遮挡等
+            // 0:表示参与提取特征点
+            // 默认为参与提取特征点
             cloudNeighborPicked[i] = 0;
+
+            // 特征点的分类标记
+            // 1：曲率比较大
+            // 0:默认情况下，比较平坦点，现实世界也是以平面点为主；
+            // 不满足1、-1的情况下，都是0比较平坦点
+            // -1:平坦的点
             cloudLabel[i] = 0;
+
             // cloudSmoothness for sorting
             cloudSmoothness[i].value = cloudCurvature[i];
             cloudSmoothness[i].ind = i;
@@ -154,16 +171,21 @@ public:
 
     void extractFeatures()
     {
+        // 存放角点特征的点云和面点特征的点云；
+        // 计算特征前，容器先清空；
         cornerCloud->clear();
         surfaceCloud->clear();
 
         pcl::PointCloud<PointType>::Ptr surfaceCloudScan(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr surfaceCloudScanDS(new pcl::PointCloud<PointType>());
 
+        // 保证提取的特征整体分布较为均匀
+        // 遍历每个scan
         for (int i = 0; i < N_SCAN; i++)
         {
             surfaceCloudScan->clear();
 
+            //每个scan6等分
             for (int j = 0; j < 6; j++)
             {
 
@@ -173,15 +195,23 @@ public:
                 if (sp >= ep)
                     continue;
 
+                // 对当前提取段的曲率进行排序
+                // 按照曲率从小到大：by_value();
+                // cloudSmoothness: 点的index和曲率，排序按照曲率排序，尽管cloudSmoothness被打乱了，可以用index与曲率的关联找到,以及该点状态；
                 std::sort(cloudSmoothness.begin() + sp, cloudSmoothness.begin() + ep, by_value());
 
+                // 记录挑到的
                 int largestPickedNum = 0;
+                // 选取曲率大的点，所以从后往前遍历
                 for (int k = ep; k >= sp; k--)
                 {
+                    // 利用cloudSmoothness中index可以关联到该点是否参与提
                     int ind = cloudSmoothness[k].ind;
+                    // 参与提取特征点，曲率大于阈值，则算1个
                     if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] > edgeThreshold)
                     {
                         largestPickedNum++;
+                        // 每个scan分成6段，每段提取满足条件的曲率前20大的点
                         if (largestPickedNum <= 20)
                         {
                             cloudLabel[ind] = 1;
@@ -192,6 +222,7 @@ public:
                             break;
                         }
 
+                        // 避免特征点过于集中，将当前点周围5个点状态置为1，不参
                         cloudNeighborPicked[ind] = 1;
                         for (int l = 1; l <= 5; l++)
                         {
@@ -210,6 +241,7 @@ public:
                     }
                 }
 
+                // 面点特征提取，相同道理，每段scan分
                 for (int k = sp; k <= ep; k++)
                 {
                     int ind = cloudSmoothness[k].ind;
@@ -217,6 +249,7 @@ public:
                     {
 
                         cloudLabel[ind] = -1;
+                        //避免面点过于集中，当前点周围5各点被屏蔽掉；
                         cloudNeighborPicked[ind] = 1;
 
                         for (int l = 1; l <= 5; l++)
@@ -249,6 +282,7 @@ public:
                 }
             }
 
+            //避免特征过大，造成计算时间过长，进行降采样；
             surfaceCloudScanDS->clear();
             downSizeFilter.setInputCloud(surfaceCloudScan);
             downSizeFilter.filter(*surfaceCloudScanDS);
