@@ -19,14 +19,14 @@ struct ResidualBlockInfo
 
     void Evaluate();
 
-    ceres::CostFunction *cost_function;
-    ceres::LossFunction *loss_function;
-    std::vector<double *> parameter_blocks;
-    std::vector<int> drop_set;
+    ceres::CostFunction *cost_function;     // 代价函数
+    ceres::LossFunction *loss_function;     // 损失函数
+    std::vector<double *> parameter_blocks; // 参数块地址数组
+    std::vector<int> drop_set; // 待marg的优化变量id
 
     double **raw_jacobians;
     std::vector<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> jacobians;
-    Eigen::VectorXd residuals;
+    Eigen::VectorXd residuals; // 残差；其中IMU：15*1，视觉：2*1
 
     int localSize(int size)
     {
@@ -39,13 +39,13 @@ struct ThreadsStruct
     std::vector<ResidualBlockInfo *> sub_factors;
     Eigen::MatrixXd A;
     Eigen::VectorXd b;
-    std::unordered_map<long, int> parameter_block_size; //global size
-    std::unordered_map<long, int> parameter_block_idx; //local size
+    std::unordered_map<long, int> parameter_block_size; // global size
+    std::unordered_map<long, int> parameter_block_idx;  // local size
 };
 
 class MarginalizationInfo
 {
-  public:
+public:
     ~MarginalizationInfo();
     int localSize(int size) const;
     int globalSize(int size) const;
@@ -54,28 +54,28 @@ class MarginalizationInfo
     void marginalize();
     std::vector<double *> getParameterBlocks(std::unordered_map<long, double *> &addr_shift);
 
+    // 所有观测项
     std::vector<ResidualBlockInfo *> factors;
     int m, n;
-    std::unordered_map<long, int> parameter_block_size; //global size
+    std::unordered_map<long, int> parameter_block_size; // global size
     int sum_block_size;
-    std::unordered_map<long, int> parameter_block_idx; //local size
+    std::unordered_map<long, int> parameter_block_idx; // local size
     std::unordered_map<long, double *> parameter_block_data;
 
-    std::vector<int> keep_block_size; //global size
-    std::vector<int> keep_block_idx;  //local size
+    std::vector<int> keep_block_size; // global size
+    std::vector<int> keep_block_idx;  // local size
     std::vector<double *> keep_block_data;
 
     Eigen::MatrixXd linearized_jacobians;
     Eigen::VectorXd linearized_residuals;
     const double eps = 1e-8;
-
 };
 
 class MarginalizationFactor : public ceres::CostFunction
 {
-  public:
-    MarginalizationFactor(MarginalizationInfo* _marginalization_info);
+public:
+    MarginalizationFactor(MarginalizationInfo *_marginalization_info);
     virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const;
 
-    MarginalizationInfo* marginalization_info;
+    MarginalizationInfo *marginalization_info;
 };

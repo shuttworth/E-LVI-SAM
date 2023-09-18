@@ -26,16 +26,16 @@ class IntegrationBase
     Eigen::Matrix<double, 18, 18> noise; // IMU测量噪声，可用于计算IMU协方差
 
     double sum_dt; // 两图片帧之间的总时间间隔
-    Eigen::Vector3d delta_p;
-    Eigen::Quaterniond delta_q;
-    Eigen::Vector3d delta_v;
+    Eigen::Vector3d delta_p; // 位移增量
+    Eigen::Quaterniond delta_q; // 旋转增量
+    Eigen::Vector3d delta_v; // 速度增量
 
     // saves all the IMU measurements and time difference between two image frames
     std::vector<double> dt_buf;
     std::vector<Eigen::Vector3d> acc_buf;
     std::vector<Eigen::Vector3d> gyr_buf;
 
-    IntegrationBase() = delete;
+    IntegrationBase() = delete; // 删除默认构造函数
 
     IntegrationBase(const Eigen::Vector3d &_acc_0, 
                     const Eigen::Vector3d &_gyr_0,
@@ -64,6 +64,7 @@ class IntegrationBase
         noise.block<3, 3>(15, 15) =  (GYR_W * GYR_W) * Eigen::Matrix3d::Identity();
     }
 
+    // 将本次测量和dt放入到buffer中，并propagate本次测量
     void push_back(double dt, const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr)
     {
         dt_buf.push_back(dt);
@@ -92,7 +93,7 @@ class IntegrationBase
 
     /**
     * @brief   IMU预积分传播方程
-    * @Description  积分计算两个关键帧之间IMU测量的变化量： 
+    * @Description  调用中值积分midPointIntegration()计算两个关键帧之间IMU测量的变化量： 
     *               旋转delta_q 速度delta_v 位移delta_p
     *               加速度的biaslinearized_ba 陀螺仪的Bias linearized_bg
     *               同时维护更新预积分的Jacobian和Covariance,计算优化时必要的参数
@@ -131,7 +132,8 @@ class IntegrationBase
 
     /**
     * @brief   IMU预积分中采用中值积分递推Jacobian和Covariance
-    *          构造误差的线性化递推方程，得到Jacobian和Covariance递推公式-> Paper 式9、10、11
+    *          构造误差的线性化递推方程，得到Jacobian和Covariance递推公式
+    *          对照-> Vins-Mono Paper 式9、10、11
     * @return  void
     */
     void midPointIntegration(double _dt, 
@@ -218,8 +220,13 @@ class IntegrationBase
     }
 
     
-    // calculate residuals for ceres optimization, used in imu_factor.h
-    // paper equation 24
+    // calculate residuals for ceres optimization, used in imu_factor.h , paper equation 24
+    /*残差评估函数:
+    该函数用于在后端非线性优化中每一次优化后评估IMU预积分残差，函数入口参数分别为：
+    优化后的第k帧预积分状态变Pi、Qi、Vi、Bai、Bgi
+    优化后的第k+1帧预积分状态量Pj、Qj、Vj、Baj、Bgj
+    函数返回值为k和k+1之间IMU预积分状态与非线性优化状态之间的残差，用于构建后端的非线性优化误差函数
+    */
     Eigen::Matrix<double, 15, 1> evaluate(const Eigen::Vector3d &Pi, const Eigen::Quaterniond &Qi, const Eigen::Vector3d &Vi, const Eigen::Vector3d &Bai, const Eigen::Vector3d &Bgi,
                                           const Eigen::Vector3d &Pj, const Eigen::Quaterniond &Qj, const Eigen::Vector3d &Vj, const Eigen::Vector3d &Baj, const Eigen::Vector3d &Bgj)
     {
