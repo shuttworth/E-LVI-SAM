@@ -957,7 +957,7 @@ void Estimator::optimization()
                     if (imu_i == imu_j)
                         continue;
 
-                    // 导入重投影残差块信息（含时间偏移or不含）到marginalization_info
+                    // 导入重投影残差快信息（含时间偏移or不含）到marginalization_info
                     Vector3d pts_j = it_per_frame.point;
                     if (ESTIMATE_TD)
                     {

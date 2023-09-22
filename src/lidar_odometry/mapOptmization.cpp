@@ -19,14 +19,14 @@
 
 using namespace gtsam;
 
-using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
-using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 using symbol_shorthand::G; // GPS pose
+using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
+using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 
 /*
-    * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is time stamp)
-    */
+ * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is time stamp)
+ */
 struct PointXYZIRPYT
 {
     PCL_ADD_POINT4D
@@ -48,13 +48,14 @@ class mapOptimization : public ParamServer
 
 public:
     // gtsam
-    NonlinearFactorGraph gtSAMgraph;
+    NonlinearFactorGraph gtSAMgraph; // 本轮图优化的因子图
     Values initialEstimate;
     Values optimizedEstimate;
-    ISAM2 *isam;
+    ISAM2 *isam; // 图优化器
     Values isamCurrentEstimate;
     Eigen::MatrixXd poseCovariance;
 
+    // pub发布
     ros::Publisher pubLaserCloudSurround;
     ros::Publisher pubLaserOdometryGlobal;
     ros::Publisher pubLaserOdometryIncremental;
@@ -81,16 +82,16 @@ public:
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
-    
-    pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
-    pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
+
+    pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;     // 用点云形式存储关键帧位移
+    pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D; // 用点云形式存储关键帧位姿
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;
     pcl::PointCloud<PointTypePose>::Ptr copy_cloudKeyPoses6D;
 
-    pcl::PointCloud<PointType>::Ptr laserCloudCornerLast; // corner feature set from odoOptimization
-    pcl::PointCloud<PointType>::Ptr laserCloudSurfLast; // surf feature set from odoOptimization
-    pcl::PointCloud<PointType>::Ptr laserCloudCornerLastDS; // downsampled corner feature set from odoOptimization
-    pcl::PointCloud<PointType>::Ptr laserCloudSurfLastDS; // downsampled surf feature set from odoOptimization
+    pcl::PointCloud<PointType>::Ptr laserCloudCornerLast;   // 当前帧的角点点云     corner feature set from odoOptimization
+    pcl::PointCloud<PointType>::Ptr laserCloudSurfLast;     // 当前帧的面点点云     surf feature set from odoOptimization
+    pcl::PointCloud<PointType>::Ptr laserCloudCornerLastDS; // 降采样后的当前帧的角点点云      downsampled corner feature set from odoOptimization
+    pcl::PointCloud<PointType>::Ptr laserCloudSurfLastDS;   // 降采样后的当前帧的面点点云  downsampled surf feature set from odoOptimization
 
     pcl::PointCloud<PointType>::Ptr laserCloudOri;
     pcl::PointCloud<PointType>::Ptr coeffSel;
@@ -118,7 +119,7 @@ public:
     pcl::VoxelGrid<PointType> downSizeFilterSurf;
     pcl::VoxelGrid<PointType> downSizeFilterICP;
     pcl::VoxelGrid<PointType> downSizeFilterSurroundingKeyPoses; // for surrounding key poses of scan-to-map optimization
-    
+
     ros::Time timeLaserInfoStamp;
     double timeLaserInfoCur;
 
@@ -148,6 +149,7 @@ public:
     Eigen::Affine3f incrementalOdometryAffineFront;
     Eigen::Affine3f incrementalOdometryAffineBack;
 
+    // 设置求解器，创建以上话题发布器，订阅点云、GPS、VIS回环帧并处理，设置体素化滤波器
     mapOptimization()
     {
         ISAM2Params parameters;
@@ -183,6 +185,7 @@ public:
         allocateMemory();
     }
 
+    // 重置数据和内存占用
     void allocateMemory()
     {
         cloudKeyPoses3D.reset(new pcl::PointCloud<PointType>());
@@ -227,6 +230,7 @@ public:
         matP = cv::Mat(6, 6, CV_32F, cv::Scalar::all(0));
     }
 
+    // 订阅点云的回调函数
     void laserCloudInfoHandler(const lvi_sam::cloud_infoConstPtr &msgIn)
     {
         // extract time stamp
@@ -264,6 +268,7 @@ public:
         }
     }
 
+    // 订阅GPS的回调函数
     void gpsHandler(const nav_msgs::Odometry::ConstPtr &gpsMsg)
     {
         gpsQueue.push_back(*gpsMsg);
@@ -398,8 +403,9 @@ public:
         downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
         downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
 
-	    cout << "****************************************************" << endl;
-	    cout << "Saving map to pcd files completed\n" << endl;
+        cout << "****************************************************" << endl;
+        cout << "Saving map to pcd files completed\n"
+             << endl;
 
         return true;
     }
@@ -434,7 +440,7 @@ public:
             return;
 
         pcl::KdTreeFLANN<PointType>::Ptr kdtreeGlobalMap(new pcl::KdTreeFLANN<PointType>());
-        
+
         pcl::PointCloud<PointType>::Ptr globalMapKeyPoses(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalMapKeyPosesDS(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalMapKeyFrames(new pcl::PointCloud<PointType>());
@@ -452,7 +458,7 @@ public:
         for (int i = 0; i < (int)pointSearchIndGlobalMap.size(); ++i)
             globalMapKeyPoses->push_back(cloudKeyPoses3D->points[pointSearchIndGlobalMap[i]]);
         // downsample near selected key frames
-        pcl::VoxelGrid<PointType> downSizeFilterGlobalMapKeyPoses; // for global map visualization
+        pcl::VoxelGrid<PointType> downSizeFilterGlobalMapKeyPoses;                                                                                            // for global map visualization
         downSizeFilterGlobalMapKeyPoses.setLeafSize(globalMapVisualizationPoseDensity, globalMapVisualizationPoseDensity, globalMapVisualizationPoseDensity); // for global map visualization
         downSizeFilterGlobalMapKeyPoses.setInputCloud(globalMapKeyPoses);
         downSizeFilterGlobalMapKeyPoses.filter(*globalMapKeyPosesDS);
@@ -1600,7 +1606,7 @@ public:
         gtSAMgraph.resize(0);
         initialEstimate.clear();
 
-        //save key poses
+        // save key poses
         PointType thisPose3D;
         PointTypePose thisPose6D;
         Pose3 latestEstimate;
@@ -1838,15 +1844,19 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "lvi_sam");
 
+    // 主线程通过mapOptimization的构造函数完成地图优化
     mapOptimization MO;
 
     ROS_INFO("\033[1;32m----> Lidar Map Optimization Started.\033[0m");
 
+    // 回环检测线程
     std::thread loopthread(&mapOptimization::loopClosureThread, &MO);
+    // 点云和地图保存线程
     std::thread visualizeMapThread(&mapOptimization::visualizeGlobalMapThread, &MO);
 
     ros::spin();
 
+    // 主线程等待回环检测线程、地图保存线程结束
     loopthread.join();
     visualizeMapThread.join();
 

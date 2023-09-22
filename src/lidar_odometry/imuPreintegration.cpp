@@ -168,7 +168,7 @@ public:
     gtsam::noiseModel::Diagonal::shared_ptr priorPoseNoise;  // 先验的位姿噪声
     gtsam::noiseModel::Diagonal::shared_ptr priorVelNoise;   // 先验的速度噪声
     gtsam::noiseModel::Diagonal::shared_ptr priorBiasNoise;  // 先验的bias零偏噪声
-    gtsam::noiseModel::Diagonal::shared_ptr correctionNoise; // 先验的位姿修正噪声
+    gtsam::noiseModel::Diagonal::shared_ptr correctionNoise; // 位姿修正噪声
     gtsam::noiseModel::Diagonal::shared_ptr correctionNoise2;
     gtsam::Vector noiseModelBetweenBias;
 
@@ -206,12 +206,12 @@ public:
     gtsam::Pose3 lidar2Imu = gtsam::Pose3(gtsam::Rot3(1, 0, 0, 0), gtsam::Point3(extTrans.x(), extTrans.y(), extTrans.z()));
 #else
     //? mod: 坐标系定义这里还是有一个细节问题
-    // 基本概念明确：这里的gtsam::Pose3 imu2Lidar lidar2Imu都是只有平移没有旋转(在LIO里程计部分已经完成了旋转)
+    // 基本概念明确：这里的gtsam::Pose3 imu2Lidar lidar2Imu都是只有平移没有旋转(在LIO里程计部分已经完成了旋转,LIO里程计部分我们之后讲到)
     // 关键词：只有平移，没有旋转
     // gtsam::Pose3 imu2Lidar 实际上 == T_imulidar_lidar, imulidar系表示:旋转到和LiDAR坐标轴完全平行、但是坐标系原点不变的IMU坐标系
-    // T_imu_imulidar = [R_imu_lidar, 0; 0 1](只旋转), T_imu_lidar = [R_imu_lidar, t_imu_lidar; 0, 1](旋转+平移)
+    // T_imu_imulidar = [R_imu_lidar, 0; 0 1](只旋转), T_imu_imulidar_lidar = [R_imu_lidar, t_imu_lidar; 0, 1](旋转+平移)
     
-    // 而配置文件中我们给的extTrans是T_imu_lidar(旋转+平移)部分的平移部分，即t_imu_lidar，所以这里还需要转换一步，将其转换成只剩只有平移没有旋转部分的平移
+    // 而配置文件中我们给的extTrans是T_imu_imulidar_lidar(旋转+平移)的平移部分，即t_imu_lidar，所以这里还需要转换一步，将其转换成只剩只有平移没有旋转部分(T_imulidar_lidar)的平移
     // R_lidar_imu * R_imu_lidar = I(T_imulidar_lidar第一项), R_lidar_imu * t_imu_lidar(T_imulidar_lidar第二项)
     // T_imulidar_lidar = [I, R_lidar_imu*t_imu_lidar; 0, 1]  <-----------------------------------------------------|
     // T_imulidar_lidar，其中旋转一定是单位阵，因为这里的IMU是已经转换到和LiDAR坐标轴xyz完全平行的形式了，所以只剩下平移了。 ----->|
@@ -229,7 +229,7 @@ public:
         // 发布IMU预积分odom话题和IMU位移可视化话题
         pubImuOdometry = nh.advertise<nav_msgs::Odometry>(odomTopic + "_incremental", 2000);
 
-        // 设置IMU的参数，都在PreintegrationParams中：提前标定的加速度协方差，陀螺仪协方差，积分协方差，零偏
+        // 在PreintegrationParams中设置IMU的参数：提前标定的加速度协方差，陀螺仪协方差，积分协方差，零偏
         boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(imuGravity);
         p->accelerometerCovariance = gtsam::Matrix33::Identity(3, 3) * pow(imuAccNoise, 2); // acc white noise in continuous
         p->gyroscopeCovariance = gtsam::Matrix33::Identity(3, 3) * pow(imuGyrNoise, 2);     // gyro white noise in continuous
