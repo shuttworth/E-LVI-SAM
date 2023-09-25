@@ -10,15 +10,15 @@ class LoopDetector
 {
 public:
 
-	BriefDatabase db;
-	BriefVocabulary* voc;
+	BriefDatabase db; // 描述子数据库
+	BriefVocabulary* voc; // 字典
 
-	map<int, cv::Mat> image_pool;
+	map<int, cv::Mat> image_pool; // 用于可视化和Debug
 
 	list<KeyFrame*> keyframelist;
 
-	LoopDetector();
-	void loadVocabulary(std::string voc_path);
+	LoopDetector(); // 默认构造函数
+	void loadVocabulary(std::string voc_path); // 按照路径加载字典，初始化描述子数据库db
 	
 	void addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop);
 	void addKeyFrameIntoVoc(KeyFrame* keyframe);

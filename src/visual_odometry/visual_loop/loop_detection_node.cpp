@@ -54,18 +54,20 @@ void image_callback(const sensor_msgs::ImageConstPtr &image_msg)
     if(!LOOP_CLOSURE)
         return;
 
+    // 保存到图片队列
     m_buf.lock();
     image_buf.push(image_msg);
     m_buf.unlock();
 
     // detect unstable camera stream
+    // 检查图片连续性，如果不连续，则清空所有队列
     static double last_image_time = -1;
     if (last_image_time == -1)
         last_image_time = image_msg->header.stamp.toSec();
     else if (image_msg->header.stamp.toSec() - last_image_time > 1.0 || image_msg->header.stamp.toSec() < last_image_time)
     {
         ROS_WARN("image discontinue! detect a new sequence!");
-        new_sequence();
+        new_sequence(); // 清空
     }
     last_image_time = image_msg->header.stamp.toSec();
 }
@@ -114,15 +116,19 @@ void process()
         sensor_msgs::PointCloudConstPtr point_msg = NULL;
         nav_msgs::Odometry::ConstPtr pose_msg = NULL;
 
+        // Step 1.1
         // find out the messages with same time stamp
         m_buf.lock();
         if(!image_buf.empty() && !point_buf.empty() && !pose_buf.empty())
         {
+            // 时间戳对齐
+            // 若最旧位姿时间戳旧于最旧图片时间戳，则抛弃旧的位姿数据
             if (image_buf.front()->header.stamp.toSec() > pose_buf.front()->header.stamp.toSec())
             {
                 pose_buf.pop();
                 printf("throw pose at beginning\n");
             }
+            // 若最旧特征点时间戳旧于最旧图片时间戳，则抛弃旧的特征点数据
             else if (image_buf.front()->header.stamp.toSec() > point_buf.front()->header.stamp.toSec())
             {
                 point_buf.pop();
@@ -150,7 +156,7 @@ void process()
 
         if (pose_msg != NULL)
         {
-            // skip fisrt few
+            // skip fisrt few 前几帧不易产生回环
             static int skip_first_cnt = 0;
             if (skip_first_cnt < SKIP_FIRST_CNT)
             {
@@ -175,7 +181,8 @@ void process()
                                      pose_msg->pose.pose.orientation.y,
                                      pose_msg->pose.pose.orientation.z).toRotationMatrix();
 
-            // add keyframe
+            // Step 1.2
+            // add keyframe  如果平移距离足够大才认定为回环检测模块的关键帧
             if((T - last_t).norm() > SKIP_DIST)
             {
                 // convert image
@@ -197,6 +204,7 @@ void process()
                 
                 cv::Mat image = ptr->image;
 
+                // 构建新的关键帧
                 vector<cv::Point3f> point_3d; 
                 vector<cv::Point2f> point_2d_uv; 
                 vector<cv::Point2f> point_2d_normal;
@@ -222,14 +230,16 @@ void process()
                     point_id.push_back(p_id);
                 }
 
-                // new keyframe
+                // Step 1.2.1 
+                // construct new keyframe
                 static int global_frame_index = 0;
                 KeyFrame* keyframe = new KeyFrame(pose_msg->header.stamp.toSec(), global_frame_index, 
                                                   T, R, 
                                                   image,
                                                   point_3d, point_2d_uv, point_2d_normal, point_id);   
 
-                // detect loop
+                // Step 1.2.2 
+                // detect loop  添加新的关键帧并做回环检测
                 m_process.lock();
                 loopDetector.addKeyFrame(keyframe, 1);
                 m_process.unlock();
@@ -254,7 +264,7 @@ int main(int argc, char **argv)
     ROS_INFO("\033[1;32m----> Visual Loop Detection Started.\033[0m");
     ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Warn);
 
-    // Load params
+    // Load params  载入参数文件，并等待100微秒，载入参数
     std::string config_file;
     n.getParam("vins_config_file", config_file);
     cv::FileStorage fsSettings(config_file, cv::FileStorage::READ);
@@ -275,33 +285,41 @@ int main(int argc, char **argv)
     
     if (LOOP_CLOSURE)
     {
+        // 读取字典路径并载入字典
         string pkg_path = ros::package::getPath(PROJECT_NAME);
 
         // initialize vocabulary
+        // 加载词典：我们可以去yaml文件中看看vocabulary_file的位置和文件是什么，比如config/M2DGR_camera.yaml
         string vocabulary_file;
         fsSettings["vocabulary_file"] >> vocabulary_file;  
         vocabulary_file = pkg_path + vocabulary_file;
         loopDetector.loadVocabulary(vocabulary_file);
 
         // initialize brief extractor
+        // 加载描述子：看yaml文件里的brief_pattern_file，比如config/M2DGR_camera.yaml
         string brief_pattern_file;
         fsSettings["brief_pattern_file"] >> brief_pattern_file;  
         brief_pattern_file = pkg_path + brief_pattern_file;
         briefExtractor = BriefExtractor(brief_pattern_file);
 
         // initialize camera model
+        // 载入相机参数
         m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(config_file.c_str());
     }
 
+    // 订阅VIS窗口关键帧位姿keyframe_pose，相机IMU外参tf话题odometry/extrinsic，最新关键帧位姿话题keyframe_point，原始图片话题image_raw。
     ros::Subscriber sub_image     = n.subscribe(IMAGE_TOPIC, 30, image_callback);
     ros::Subscriber sub_pose      = n.subscribe(PROJECT_NAME + "/vins/odometry/keyframe_pose",  3, pose_callback);
     ros::Subscriber sub_point     = n.subscribe(PROJECT_NAME + "/vins/odometry/keyframe_point", 3, point_callback);
     ros::Subscriber sub_extrinsic = n.subscribe(PROJECT_NAME + "/vins/odometry/extrinsic",      3, extrinsic_callback);
 
+    // 发布回环帧图片match_image和位姿keyframe_pose用于可视化
+    // 发布视觉回环帧match_frame
     pub_match_img = n.advertise<sensor_msgs::Image>             (PROJECT_NAME + "/vins/loop/match_image", 3);
     pub_match_msg = n.advertise<std_msgs::Float64MultiArray>    (PROJECT_NAME + "/vins/loop/match_frame", 3);
     pub_key_pose  = n.advertise<visualization_msgs::MarkerArray>(PROJECT_NAME + "/vins/loop/keyframe_pose", 3);
 
+    // 关闭回环检测
     if (!LOOP_CLOSURE)
     {
         sub_image.shutdown();
@@ -315,6 +333,7 @@ int main(int argc, char **argv)
     }
 
     std::thread measurement_process;
+    // 回环检测线程,process()里是主要的处理所在
     measurement_process = std::thread(process);
 
     ros::spin();

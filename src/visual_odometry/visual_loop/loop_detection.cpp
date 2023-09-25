@@ -9,16 +9,17 @@ void LoopDetector::loadVocabulary(std::string voc_path)
     db.setVocabulary(*voc, false, 0);
 }
 
+// 把KeyFrame关键帧给加入到数据库中
 void LoopDetector::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
 {
 	int loop_index = -1;
     if (flag_detect_loop)
     {
-        loop_index = detectLoop(cur_kf, cur_kf->index);
+        loop_index = detectLoop(cur_kf, cur_kf->index); // 搜索当前关键帧的回环帧
     }
     else
     {
-        addKeyFrameIntoVoc(cur_kf);
+        addKeyFrameIntoVoc(cur_kf); // 添加关键帧描述子到数据库
     }
 
     // check loop if valid using ransan and pnp
@@ -26,11 +27,12 @@ void LoopDetector::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
 	{
         KeyFrame* old_kf = getKeyFrame(loop_index);
 
-        if (cur_kf->findConnection(old_kf))
+        if (cur_kf->findConnection(old_kf))  // 调用回环帧验证函数
         {
             std_msgs::Float64MultiArray match_msg;
             match_msg.data.push_back(cur_kf->time_stamp);
             match_msg.data.push_back(old_kf->time_stamp);
+            // 在这里把视觉回环话题给发布出去，在LIS系统里将订阅match_frame
             pub_match_msg.publish(match_msg);
         }
 	}

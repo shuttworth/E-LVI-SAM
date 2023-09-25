@@ -39,6 +39,7 @@ KeyFrame::KeyFrame(double _time_stamp, int _index,
 		image.release();
 }
 
+// 前端识别的点的描述子，通常只有70个，对于闭环检测是不够的
 void KeyFrame::computeWindowBRIEFPoint()
 {
 	for(int i = 0; i < (int)point_2d_uv.size(); i++)
@@ -50,6 +51,7 @@ void KeyFrame::computeWindowBRIEFPoint()
 	briefExtractor(image, window_keypoints, window_brief_descriptors);
 }
 
+// 会对新来的 KeyFrame 即后端非线性优化刚处理完的关键帧，再重新检测出 500 个 FAST 角点进行闭环检测用，同时对所有新老角点进行 BRIEF 描述
 void KeyFrame::computeBRIEFPoint()
 {
 	const int fast_th = 20; // corner detector response threshold
@@ -172,19 +174,22 @@ void KeyFrame::PnPRANSAC(const vector<cv::Point2f> &matched_2d_old_norm,
 
 bool KeyFrame::findConnection(KeyFrame* old_kf)
 {
-	vector<cv::Point2f> matched_2d_cur, matched_2d_old;
+	vector<cv::Point2f> matched_2d_cur, matched_2d_old; // 用于存储2D点（像素坐标）
 	vector<cv::Point2f> matched_2d_cur_norm, matched_2d_old_norm;
-	vector<cv::Point3f> matched_3d;
+	vector<cv::Point3f> matched_3d; // 用于存储2D点（像素坐标）
 	vector<double> matched_id;
 	vector<uchar> status;
 
+    // 提取this关键帧信息
 	matched_3d = point_3d;
 	matched_2d_cur = point_2d_uv;
 	matched_2d_cur_norm = point_2d_norm;
 	matched_id = point_id;
 
+    // 搜索this关键帧的window_keypoints中，与参数帧汉明距离足够小的关键点，放到old和old_norm中，没找到的也要占位
 	searchByBRIEFDes(matched_2d_old, matched_2d_old_norm, status, old_kf->brief_descriptors, old_kf->keypoints, old_kf->keypoints_norm);
-	reduceVector(matched_2d_cur, status);
+	// 删除那些没有找到相似点的点对
+    reduceVector(matched_2d_cur, status);
 	reduceVector(matched_2d_old, status);
 	reduceVector(matched_2d_cur_norm, status);
 	reduceVector(matched_2d_old_norm, status);
@@ -194,6 +199,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 	if ((int)matched_2d_cur.size() > MIN_LOOP_NUM)
 	{
 		status.clear();
+        // PnP+RANSAC筛选内点，即用某个位姿重投影误差较小的关键点
 	    PnPRANSAC(matched_2d_old_norm, matched_3d, status);
 	    reduceVector(matched_2d_cur, status);
 	    reduceVector(matched_2d_old, status);
@@ -204,6 +210,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 
         if ((int)matched_2d_cur.size() > MIN_LOOP_NUM)
         {
+            // 可视化，它首先创建一个图像，然后在图像上绘制匹配的点和连接它们的线。最后，它发布匹配的图像。
         	if (pub_match_img.getNumSubscribers() != 0)
             {
             	int gap = 10;

@@ -26,6 +26,7 @@ using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 
 /*
  * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is time stamp)
+ * 6D位姿点云结构定义
  */
 struct PointXYZIRPYT
 {
@@ -157,14 +158,23 @@ public:
         parameters.relinearizeSkip = 1;
         isam = new ISAM2(parameters);
 
+        // 发布历史关键帧里程计
         pubKeyPoses = nh.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/lidar/mapping/trajectory", 1);
+        // 发布局部关键帧map的特征点云
         pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/lidar/mapping/map_global", 1);
+        // 融合了LIO-SAM新版本的内容进来
+        // 发布激光里程计
         pubLaserOdometryGlobal = nh.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/lidar/mapping/odometry", 1);
+        // 发布激光里程计，它与上面的激光里程计基本一样，只是roll、pitch用imu数据加权平均了一下，z做了限制
         pubLaserOdometryIncremental = nh.advertise<nav_msgs::Odometry>(PROJECT_NAME + "/lidar/mapping/odometry_incremental", 1);
+        // 发布激光里程计路径，rviz中表现为载体的运行轨迹
         pubPath = nh.advertise<nav_msgs::Path>(PROJECT_NAME + "/lidar/mapping/path", 1);
 
+        // 订阅特征提取后的cloud_info
         subCloud = nh.subscribe<lvi_sam::cloud_info>(PROJECT_NAME + "/lidar/feature/cloud_info", 5, &mapOptimization::laserCloudInfoHandler, this, ros::TransportHints().tcpNoDelay());
+        // 订阅GPS里程计
         subGPS = nh.subscribe<nav_msgs::Odometry>(gpsTopic, 50, &mapOptimization::gpsHandler, this, ros::TransportHints().tcpNoDelay());
+        // 订阅VIS的回环帧, Float64MultiArray类型的
         subLoop = nh.subscribe<std_msgs::Float64MultiArray>(PROJECT_NAME + "/vins/loop/match_frame", 5, &mapOptimization::loopInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
         pubHistoryKeyFrames = nh.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/lidar/mapping/loop_closure_history_cloud", 1);
@@ -230,7 +240,37 @@ public:
         matP = cv::Mat(6, 6, CV_32F, cv::Scalar::all(0));
     }
 
-    // 订阅点云的回调函数
+    /**
+     * 回调函数:订阅当前激光帧点云信息(来自featureExtraction)
+     * 1、当前帧位姿初始化updateInitialGuess()
+     *   1) 如果是第一帧，用原始imu数据的RPY初始化当前帧位姿（旋转部分）
+     *   2) 后续帧，用imu里程计计算两帧之间的增量位姿变换，作用于前一帧的激光位姿，得到当前帧激光位姿
+     * 2、提取局部角点、平面点云集合，加入局部mapextractSurroundingKeyFrames()
+     *   1) 对最近的一帧关键帧，搜索时空维度上相邻的关键帧集合，降采样一下
+     *   2) 对关键帧集合中的每一帧，提取对应的角点、平面点，加入局部map中
+     * 3、当前激光帧角点、平面点集合降采样downsampleCurrentScan()
+     * 4、scan-to-map优化当前帧位姿scan2MapOptimization()
+     *   (1) 要求当前帧特征点数量足够多，且匹配的点数够多，才执行优化
+     *   (2) 迭代30次（上限）优化
+     *      1) 当前激光帧角点寻找局部map匹配点
+     *          a.更新当前帧位姿，将当前帧角点坐标变换到map系下，在局部map中查找5个最近点，距离小于1m，且5个点构成直线（用距离中心点的协方差矩阵，特征值进行判断），则认为匹配上了
+     *          b.计算当前帧角点到直线的距离、垂线的单位向量，存储为角点参数
+     *      2) 当前激光帧平面点寻找局部map匹配点
+     *          a.更新当前帧位姿，将当前帧平面点坐标变换到map系下，在局部map中查找5个最近点，距离小于1m，且5个点构成平面（最小二乘拟合平面），则认为匹配上了
+     *          b.计算当前帧平面点到平面的距离、垂线的单位向量，存储为平面点参数
+     *      3) 提取当前帧中与局部map匹配上了的角点、平面点，加入同一集合
+     *      4) 对匹配特征点计算Jacobian矩阵，观测值为特征点到直线、平面的距离，构建高斯牛顿方程，迭代优化当前位姿，存transformTobeMapped
+     *   (3)用imu原始RPY数据与scan-to-map优化后的位姿进行加权融合，更新当前帧位姿的roll、pitch，约束z坐标
+     * 5、设置当前帧为关键帧并执行因子图优化saveKeyFramesAndFactor()
+     *   1) 计算当前帧与前一帧位姿变换，如果变化太小，不设为关键帧，反之设为关键帧
+     *   2) 添加激光里程计因子、GPS因子、闭环因子
+     *   3) 执行因子图优化
+     *   4) 得到当前帧优化后位姿，位姿协方差
+     *   5) 添加cloudKeyPoses3D，cloudKeyPoses6D，更新transformTobeMapped，添加当前关键帧的角点、平面点集合
+     * 6、更新因子图中所有变量节点的位姿，也就是所有历史关键帧的位姿，更新里程计轨迹correctPoses()
+     * 7、发布激光里程计publishOdometry()
+     * 8、发布里程计、点云、轨迹publishFrames()
+     */
     void laserCloudInfoHandler(const lvi_sam::cloud_infoConstPtr &msgIn)
     {
         // extract time stamp
@@ -239,8 +279,8 @@ public:
 
         // extract info and feature cloud
         cloudInfo = *msgIn;
-        pcl::fromROSMsg(msgIn->cloud_corner, *laserCloudCornerLast);
-        pcl::fromROSMsg(msgIn->cloud_surface, *laserCloudSurfLast);
+        pcl::fromROSMsg(msgIn->cloud_corner, *laserCloudCornerLast); // 保存角点
+        pcl::fromROSMsg(msgIn->cloud_surface, *laserCloudSurfLast);  // 保存面点
 
         std::lock_guard<std::mutex> lock(mtx);
 
@@ -250,20 +290,28 @@ public:
 
             timeLastProcessing = timeLaserInfoCur;
 
+            // Step 1.1
             updateInitialGuess();
 
+            // Step 1.2
             extractSurroundingKeyFrames();
 
+            // Step 1.3
             downsampleCurrentScan();
 
+            // Step 1.4
             scan2MapOptimization();
 
+            // Step 1.5
             saveKeyFramesAndFactor();
 
+            // Step 1.6
             correctPoses();
 
+            // Step 1.7
             publishOdometry();
 
+            // Step 1.8
             publishFrames();
         }
     }
@@ -485,6 +533,7 @@ public:
         publishCloud(pubLaserCloudSurround, globalMapKeyFramesDS, timeLaserInfoStamp, odometryFrame);
     }
 
+    // LIS系统自己的回环
     void loopClosureThread()
     {
         if (loopClosureEnableFlag == false)
@@ -764,16 +813,17 @@ public:
         pubLoopConstraintEdge.publish(markerArray);
     }
 
+    // Step 1.1
     void updateInitialGuess()
     {
         // save current transformation before any processing
         incrementalOdometryAffineFront = trans2Affine3f(transformTobeMapped);
 
-        static Eigen::Affine3f lastImuTransformation;
-        // system initialization
-        // Step 0. 整个LIO系统的初始化
+        // Step 1.1.1   system initialization
+        static Eigen::Affine3f lastImuTransformation; // 记住这个名称
         if (cloudKeyPoses3D->points.empty())
         {
+            // 当关键帧集合为空时，用激光帧的imu原始数据角度数据初始化
             transformTobeMapped[0] = cloudInfo.imuRollInit;
             transformTobeMapped[1] = cloudInfo.imuPitchInit;
             transformTobeMapped[2] = cloudInfo.imuYawInit;
@@ -785,8 +835,7 @@ public:
             return;
         }
 
-        // use VINS odometry estimation for pose guess
-        // Step 1. 优先使用VINS odom做初值猜测
+        // Step 1.1.2   优先使用VINS odom做初值猜测
         static int vinsOdomResetId = 0; //; 上次vins里程计重启的id
         static bool lastVinsTransAvailable = false;
         static Eigen::Affine3f lastVinsTransformation;
@@ -828,8 +877,7 @@ public:
             lastVinsTransAvailable = false;
         }
 
-        // use imu pre-integration estimation for pose guess
-        // Step 2. 其次使用imu odom做初值猜测
+        // Step 1.1.3 其次使用imu odom做初值猜测
         // static int imuOdomResetId = 0; //; 上次imu里程计重启的id
         static bool lastImuPreTransAvailable = false;
         static Eigen::Affine3f lastImuPreTransformation;
@@ -865,7 +913,7 @@ public:
         }
 
         // use imu incremental estimation for pose guess (only rotation)
-        // Step 3. 最后使用原始IMU姿态进行初值猜测
+        // Step 1.1.4. 最后使用原始IMU姿态进行初值猜测
         if (cloudInfo.imuAvailable == true)
         {
             // ROS_INFO("Using IMU initial guess");
@@ -900,20 +948,26 @@ public:
 
     void extractNearby()
     {
+        // 1.2.1 kdtree搜索
+        // 搜索出来距离50米的关键帧位姿（位置）存放在这个点云容器中
         pcl::PointCloud<PointType>::Ptr surroundingKeyPoses(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr surroundingKeyPosesDS(new pcl::PointCloud<PointType>());
+        // 这两个变量是 KDtree 搜索用到的两个临时变量
         std::vector<int> pointSearchInd;
         std::vector<float> pointSearchSqDis;
-
         // extract all the nearby key poses and downsample them
         kdtreeSurroundingKeyPoses->setInputCloud(cloudKeyPoses3D); // create kd-tree
         kdtreeSurroundingKeyPoses->radiusSearch(cloudKeyPoses3D->back(), (double)surroundingKeyframeSearchRadius, pointSearchInd, pointSearchSqDis);
+
+        // 1.2.2 surroundingKeyPoses存储相邻关键帧
+        // 以cloudKeyPoses3D->back() 为中心 以surroundingKeyframeSearchRadius（默认50米）为半径 搜索最近的点
         for (int i = 0; i < (int)pointSearchInd.size(); ++i)
         {
             int id = pointSearchInd[i];
             surroundingKeyPoses->push_back(cloudKeyPoses3D->points[id]);
         }
 
+        // 1.2.3 下采样
         downSizeFilterSurroundingKeyPoses.setInputCloud(surroundingKeyPoses);
         downSizeFilterSurroundingKeyPoses.filter(*surroundingKeyPosesDS);
         for (auto &pt : surroundingKeyPosesDS->points)
@@ -922,7 +976,7 @@ public:
             pt.intensity = cloudKeyPoses3D->points[pointSearchInd[0]].intensity;
         }
 
-        // also extract some latest key frames in case the robot rotates in one position
+        // 1.2.4 把10s内的关键帧cloudKeyPoses3D中的位置也加入到surroundingKeyPosesDS中
         int numPoses = cloudKeyPoses3D->size();
         for (int i = numPoses - 1; i >= 0; --i)
         {
@@ -932,6 +986,7 @@ public:
                 break;
         }
 
+        // 1.2.5 extractCloud：提取边缘和平面点对应的localmap，把surroundingKeyPosesDS传入到函数中
         extractCloud(surroundingKeyPosesDS);
     }
 
@@ -940,12 +995,14 @@ public:
         // fuse the map
         laserCloudCornerFromMap->clear();
         laserCloudSurfFromMap->clear();
+        // 1.2.5.1 对输入的surroundingKeyPosesDS进行遍历，找到50m之内的位置
         for (int i = 0; i < (int)cloudToExtract->size(); ++i)
         {
             if (pointDistance(cloudToExtract->points[i], cloudKeyPoses3D->back()) > surroundingKeyframeSearchRadius)
                 continue;
 
             int thisKeyInd = (int)cloudToExtract->points[i].intensity;
+            // 1.2.5.2 角点点云和平面点点云投影到世界坐标系
             if (laserCloudMapContainer.find(thisKeyInd) != laserCloudMapContainer.end())
             {
                 // transformed cloud available
@@ -977,21 +1034,16 @@ public:
             laserCloudMapContainer.clear();
     }
 
+    // Step 1.2
     void extractSurroundingKeyFrames()
     {
         if (cloudKeyPoses3D->points.empty() == true)
             return;
 
-        // if (loopClosureEnableFlag == true)
-        // {
-        //     extractForLoopClosure();
-        // } else {
-        //     extractNearby();
-        // }
-
         extractNearby();
     }
 
+    // Step 1.3
     void downsampleCurrentScan()
     {
         // Downsample cloud from current scan
@@ -1013,8 +1065,10 @@ public:
 
     void cornerOptimization()
     {
+        // 更新点云点投影到地图坐标系的变换矩阵，实际上也就是当前帧位姿
         updatePointAssociateToMap();
 
+        // 并行计算每个角点的残差
 #pragma omp parallel for num_threads(numberOfCores)
         for (int i = 0; i < laserCloudCornerLastDSNum; i++)
         {
@@ -1023,15 +1077,17 @@ public:
             std::vector<float> pointSearchSqDis;
 
             pointOri = laserCloudCornerLastDS->points[i];
-            pointAssociateToMap(&pointOri, &pointSel);
+            pointAssociateToMap(&pointOri, &pointSel); // 将雷达坐标系下的角特征点转换到世界坐标系下
             kdtreeCornerFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
 
             cv::Mat matA1(3, 3, CV_32F, cv::Scalar::all(0));
             cv::Mat matD1(1, 3, CV_32F, cv::Scalar::all(0));
             cv::Mat matV1(3, 3, CV_32F, cv::Scalar::all(0));
 
+            // 如果前五个点与当前点距离都小于1m
             if (pointSearchSqDis[4] < 1.0)
             {
+                // 求五个点的中心点
                 float cx = 0, cy = 0, cz = 0;
                 for (int j = 0; j < 5; j++)
                 {
@@ -1043,6 +1099,7 @@ public:
                 cy /= 5;
                 cz /= 5;
 
+                // 求五个点的协方差矩阵
                 float a11 = 0, a12 = 0, a13 = 0, a22 = 0, a23 = 0, a33 = 0;
                 for (int j = 0; j < 5; j++)
                 {
@@ -1074,42 +1131,69 @@ public:
                 matA1.at<float>(2, 1) = a23;
                 matA1.at<float>(2, 2) = a33;
 
+                /**
+                 * 协方差矩阵与点云中角点面点之间的关系:
+                 1.假设点云序列为S，计算 S 的协方差矩阵，记为 cov_mat ，cov_mat 的特征值记为 V ，特征向量记为 E 。
+                 2.如果 S 分布在一条线段上，那么 V 中一个特征值就会明显比其他两个大，E 中与较大特征值相对应的特征向量代表边缘线的方向。(一大两小，大的代表直线方向)
+                 3.如果 S 分布在一块平面上，那么 V 中一个特征值就会明显比其他两个小，E 中与较小特征值相对应的特征向量代表平面片的方向。(一小两大，小方向)边缘线或平面块的位置通过穿过 S 的几何中心来确定。
+
+                 计算协方差矩阵的特征值和特征向量，用于判断这5个点是不是呈线状分布，此为PCA的原理； */
                 cv::eigen(matA1, matD1, matV1);
 
+                // 如果最大特征值大于次大特征值的3倍，那么就认为构成线
                 if (matD1.at<float>(0, 0) > 3 * matD1.at<float>(0, 1))
                 {
-
+                    // 当前待匹配角特征点
+                    // ※※※对应公式(10)中x_{k+1,i}_w
                     float x0 = pointSel.x;
                     float y0 = pointSel.y;
                     float z0 = pointSel.z;
+                    // 从中心点沿着方向向量向两端移动0.1m，构造线上的两个点
+                    // ※※※对应公式(10)中x_{k,j}_w
                     float x1 = cx + 0.1 * matV1.at<float>(0, 0);
                     float y1 = cy + 0.1 * matV1.at<float>(0, 1);
                     float z1 = cz + 0.1 * matV1.at<float>(0, 2);
+                    // ※※※对应公式(10)中x_{k,l}_w
                     float x2 = cx - 0.1 * matV1.at<float>(0, 0);
                     float y2 = cy - 0.1 * matV1.at<float>(0, 1);
                     float z2 = cz - 0.1 * matV1.at<float>(0, 2);
 
+                    // 向量OA = (x0 - x1, y0 - y1, z0 - z1), 向量OB = (x0 - x2, y0 - y2, z0 - z2)，向量AB = （x1 - x2, y1 - y2, z1 - z2）;
+                    // 点到线的距离，d = |向量OA 叉乘 向量OB|/|AB|;
+                    // 向量OA 叉乘 向量OB 得到的向量模长 ： 是垂直a、b所在平面，且以|b|·sinθ为高、|a|为底的平行四边形的面积，
+                    // 因此|向量OA 叉乘 向量OB|再除以|AB|的模长，则得到高度，即点到线的距离；
+
+                    // OA×OB叉乘向量的模长，也就是平行四边形面积
+                    // ※※※对应公式(11)中的a012
                     float a012 = sqrt(((x0 - x1) * (y0 - y2) - (x0 - x2) * (y0 - y1)) * ((x0 - x1) * (y0 - y2) - (x0 - x2) * (y0 - y1)) + ((x0 - x1) * (z0 - z2) - (x0 - x2) * (z0 - z1)) * ((x0 - x1) * (z0 - z2) - (x0 - x2) * (z0 - z1)) + ((y0 - y1) * (z0 - z2) - (y0 - y2) * (z0 - z1)) * ((y0 - y1) * (z0 - z2) - (y0 - y2) * (z0 - z1)));
 
+                    // AB的模长，也就是对角线的长度
+                    // ※※※对应公式(11)中的l12
                     float l12 = sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2));
 
-                    float la = ((y1 - y2) * ((x0 - x1) * (y0 - y2) - (x0 - x2) * (y0 - y1)) + (z1 - z2) * ((x0 - x1) * (z0 - z2) - (x0 - x2) * (z0 - z1))) / a012 / l12;
-
-                    float lb = -((x1 - x2) * ((x0 - x1) * (y0 - y2) - (x0 - x2) * (y0 - y1)) - (z1 - z2) * ((y0 - y1) * (z0 - z2) - (y0 - y2) * (z0 - z1))) / a012 / l12;
-
-                    float lc = -((x1 - x2) * ((x0 - x1) * (z0 - z2) - (x0 - x2) * (z0 - z1)) + (y1 - y2) * ((y0 - y1) * (z0 - z2) - (y0 - y2) * (z0 - z1))) / a012 / l12;
-
+                    // 点线之间的距离
                     float ld2 = a012 / l12;
 
+                    // 对当前x0,y0,z0的偏导
+                    // ※※※对应公式(12)中的la、lb、lc
+                    float la = ((y1 - y2) * ((x0 - x1) * (y0 - y2) - (x0 - x2) * (y0 - y1)) + (z1 - z2) * ((x0 - x1) * (z0 - z2) - (x0 - x2) * (z0 - z1))) / a012 / l12;
+                    float lb = -((x1 - x2) * ((x0 - x1) * (y0 - y2) - (x0 - x2) * (y0 - y1)) - (z1 - z2) * ((y0 - y1) * (z0 - z2) - (y0 - y2) * (z0 - z1))) / a012 / l12;
+                    float lc = -((x1 - x2) * ((x0 - x1) * (z0 - z2) - (x0 - x2) * (z0 - z1)) + (y1 - y2) * ((y0 - y1) * (z0 - z2) - (y0 - y2) * (z0 - z1))) / a012 / l12;
+
+                    // 点线距离权重(距离越远，权重越小，相当于损失函数，为了抑制噪声的影响)
                     float s = 1 - 0.9 * fabs(ld2);
 
+                    // [coeff.x,coeff.y,coeff.z]构建了实际意义上的加权公式(12)，即partial_D/partial_G
                     coeff.x = s * la;
                     coeff.y = s * lb;
                     coeff.z = s * lc;
+                    // coeff.intensity保存残差方程的残差值，对应公式(10)中的 d_e
                     coeff.intensity = s * ld2;
 
+                    // 如果点线距离小于1m    float s = 1 - 0.9 * fabs(ld2)
                     if (s > 0.1)
                     {
+                        // 保存优化点，残差（带权重），标记这个被优化点索引
                         laserCloudOriCornerVec[i] = pointOri;
                         coeffSelCornerVec[i] = coeff;
                         laserCloudOriCornerFlag[i] = true;
@@ -1119,6 +1203,7 @@ public:
         }
     }
 
+    // 大体思路与构建角点的残差差不多，只不过这里构建的是点到平面的距离
     void surfOptimization()
     {
         updatePointAssociateToMap();
@@ -1131,8 +1216,8 @@ public:
             std::vector<float> pointSearchSqDis;
 
             pointOri = laserCloudSurfLastDS->points[i];
-            pointAssociateToMap(&pointOri, &pointSel);
-            kdtreeSurfFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
+            pointAssociateToMap(&pointOri, &pointSel); // 将雷达坐标系下的面特征点转换到世界坐标系下
+            kdtreeSurfFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis); // 在角特征点地图中寻找最近的五个面特征点
 
             Eigen::Matrix<float, 5, 3> matA0;
             Eigen::Matrix<float, 5, 1> matB0;
@@ -1144,6 +1229,7 @@ public:
 
             if (pointSearchSqDis[4] < 1.0)
             {
+                // 利用5个平面点构建超定方程，并利用qr分解计算拟合的平面系数
                 for (int j = 0; j < 5; j++)
                 {
                     matA0(j, 0) = laserCloudSurfFromMapDS->points[pointSearchInd[j]].x;
@@ -1151,13 +1237,16 @@ public:
                     matA0(j, 2) = laserCloudSurfFromMapDS->points[pointSearchInd[j]].z;
                 }
 
+                // 求解Ax+By+Cz+1=0的ABC系数（用QR分解）
                 matX0 = matA0.colPivHouseholderQr().solve(matB0);
 
+                // 求解的三组系数A B C 和 1
                 float pa = matX0(0, 0);
                 float pb = matX0(1, 0);
                 float pc = matX0(2, 0);
                 float pd = 1;
 
+                // 对应公式(14)中的偏导数 partial_D / partial_G
                 float ps = sqrt(pa * pa + pb * pb + pc * pc);
                 pa /= ps;
                 pb /= ps;
@@ -1167,6 +1256,7 @@ public:
                 bool planeValid = true;
                 for (int j = 0; j < 5; j++)
                 {
+                    // 如果拟合的５个面点中，任何一个点到平面的距离大于阈值0.2m，则认为平面拟合不好
                     if (fabs(pa * laserCloudSurfFromMapDS->points[pointSearchInd[j]].x +
                              pb * laserCloudSurfFromMapDS->points[pointSearchInd[j]].y +
                              pc * laserCloudSurfFromMapDS->points[pointSearchInd[j]].z + pd) > 0.2)
@@ -1178,13 +1268,16 @@ public:
 
                 if (planeValid)
                 {
+                    // 计算当前特征点到目标平面特征的距离，即残差值，对应公式(13)中的d_H
                     float pd2 = pa * pointSel.x + pb * pointSel.y + pc * pointSel.z + pd;
 
+                    // 计算权重(残差值越大，权重越小，相当于损失函数，抑制噪声影响)
                     float s = 1 - 0.9 * fabs(pd2) / sqrt(sqrt(pointOri.x * pointOri.x + pointOri.y * pointOri.y + pointOri.z * pointOri.z));
-
+                    // [coeff.x, coeff.y, coeff.z] 实际上是公式(14) 加了权重的 partial_D / partial_G
                     coeff.x = s * pa;
                     coeff.y = s * pb;
                     coeff.z = s * pc;
+                    // coeff.intensity保存残差方程的残差值，对应公式(13)中的 d_e
                     coeff.intensity = s * pd2;
 
                     if (s > 0.1)
@@ -1200,6 +1293,7 @@ public:
 
     void combineOptimizationCoeffs()
     {
+        // laserCloudOri统一把角点和平面点装在一起，coeffSel统一装之前计算得到的“鲁棒优化向量”
         // combine corner coeffs
         for (int i = 0; i < laserCloudCornerLastDSNum; ++i)
         {
@@ -1235,12 +1329,12 @@ public:
         // yaw = pitch          ---     yaw = roll
 
         // lidar -> camera
-        float srx = sin(transformTobeMapped[1]);
-        float crx = cos(transformTobeMapped[1]);
-        float sry = sin(transformTobeMapped[2]);
-        float cry = cos(transformTobeMapped[2]);
-        float srz = sin(transformTobeMapped[0]);
-        float crz = cos(transformTobeMapped[0]);
+        float srx = sin(transformTobeMapped[1]); // 对应公式1部分的sin(rx)
+        float crx = cos(transformTobeMapped[1]); // 对应公式1部分的cos(rx)
+        float sry = sin(transformTobeMapped[2]); // 对应公式1部分的sin(ry)
+        float cry = cos(transformTobeMapped[2]); // 对应公式1部分的cos(ry)
+        float srz = sin(transformTobeMapped[0]); // 对应公式1部分的sin(rz)
+        float crz = cos(transformTobeMapped[0]); // 对应公式1部分的cos(rz)
 
         int laserCloudSelNum = laserCloudOri->size();
         if (laserCloudSelNum < 50)
@@ -1248,12 +1342,14 @@ public:
             return false;
         }
 
-        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
-        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
+        // matA雅克比矩阵 matB代价函数矩阵
+        // 这里先完成维度和构造和初始化，在之后才进行赋值操作
+        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0)); // 对应公式(3)中的雅克比矩阵J
+        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0)); // 对应公式(3)中雅克比矩阵的转置JT
+        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0)); // 对应公式(3)左边部分的系数JTJ
+        cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));  //对应公式(3)右边的残差项f
+        cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0)); //对应公式(3)的右部分-JTf
+        cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0)); //对应公式(3)中的delta_x
 
         PointType pointOri, coeff;
 
@@ -1269,22 +1365,29 @@ public:
             coeff.z = coeffSel->points[i].x;
             coeff.intensity = coeffSel->points[i].intensity;
             // in camera
+            // 对应公式(7)  旋转矩阵对x方向旋转的偏导
             float arx = (crx * sry * srz * pointOri.x + crx * crz * sry * pointOri.y - srx * sry * pointOri.z) * coeff.x + (-srx * srz * pointOri.x - crz * srx * pointOri.y - crx * pointOri.z) * coeff.y + (crx * cry * srz * pointOri.x + crx * cry * crz * pointOri.y - cry * srx * pointOri.z) * coeff.z;
 
+            // 对应公式(8)  旋转矩阵对y方向旋转的偏导
             float ary = ((cry * srx * srz - crz * sry) * pointOri.x + (sry * srz + cry * crz * srx) * pointOri.y + crx * cry * pointOri.z) * coeff.x + ((-cry * crz - srx * sry * srz) * pointOri.x + (cry * srz - crz * srx * sry) * pointOri.y - crx * sry * pointOri.z) * coeff.z;
 
+            // 对应公式(9)  旋转矩阵对z方向旋转的偏导
             float arz = ((crz * srx * sry - cry * srz) * pointOri.x + (-cry * crz - srx * sry * srz) * pointOri.y) * coeff.x + (crx * crz * pointOri.x - crx * srz * pointOri.y) * coeff.y + ((sry * srz + cry * crz * srx) * pointOri.x + (crz * sry - cry * srx * srz) * pointOri.y) * coeff.z;
-            // camera -> lidar
+            
+            // lidar -> camera
+            // 赋值操作，构造高斯牛顿迭代公式(3)里的 J 和 f
             matA.at<float>(i, 0) = arz;
             matA.at<float>(i, 1) = arx;
             matA.at<float>(i, 2) = ary;
             matA.at<float>(i, 3) = coeff.z;
             matA.at<float>(i, 4) = coeff.x;
             matA.at<float>(i, 5) = coeff.y;
-            matB.at<float>(i, 0) = -coeff.intensity;
+            matB.at<float>(i, 0) = -coeff.intensity; // 负号在这里加上了
         }
 
+        // J -> JT
         cv::transpose(matA, matAt);
+        // QR分解计算公式(3)来求得位姿增量delta_x(matX)，在之后的位姿估算环节中使用
         matAtA = matAt * matA;
         matAtB = matAt * matB;
         cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
@@ -1295,10 +1398,14 @@ public:
             cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
 
+            // 为了防止场景几何特征退化，用如下方式进行验证（视觉特征退化只需要统计特征点数量和特征点被跟踪次数）
+            // 对AtA进行特征分解
             cv::eigen(matAtA, matE, matV);
+            // 传参：输入，输入，输出matV  Calculates the covariance matrix of a set of vectors
             matV.copyTo(matV2);
 
             isDegenerate = false;
+            // 理想情况是6个自由度的特征值都很大（都大于某个常数）
             float eignThre[6] = {100, 100, 100, 100, 100, 100};
             for (int i = 5; i >= 0; i--)
             {
@@ -1306,8 +1413,9 @@ public:
                 {
                     for (int j = 0; j < 6; j++)
                     {
-                        matV2.at<float>(i, j) = 0;
+                        matV2.at<float>(i, j) = 0; // 对特征值小的特征向量置为0，从而使得该自由度上的匹配结果保持为原来的值
                     }
+                    // 判断点云退化
                     isDegenerate = true;
                 }
                 else
@@ -1318,6 +1426,7 @@ public:
             matP = matV.inv() * matV2;
         }
 
+        // 点云退化的处理
         if (isDegenerate)
         {
             cv::Mat matX2(6, 1, CV_32F, cv::Scalar::all(0));
@@ -1325,6 +1434,7 @@ public:
             matX = matP * matX2;
         }
 
+        // 将位姿增量delta_x添加到估计的位姿中
         transformTobeMapped[0] += matX.at<float>(0, 0);
         transformTobeMapped[1] += matX.at<float>(1, 0);
         transformTobeMapped[2] += matX.at<float>(2, 0);
@@ -1332,6 +1442,7 @@ public:
         transformTobeMapped[4] += matX.at<float>(4, 0);
         transformTobeMapped[5] += matX.at<float>(5, 0);
 
+        // 统计增量的值，保证迭代是收敛的
         float deltaR = sqrt(
             pow(pcl::rad2deg(matX.at<float>(0, 0)), 2) +
             pow(pcl::rad2deg(matX.at<float>(1, 0)), 2) +
@@ -1348,11 +1459,15 @@ public:
         return false; // keep optimizing
     }
 
+    // Step 1.4
     void scan2MapOptimization()
     {
+        // 1.4.1 没有关键帧保存，那就返回，不处理
         if (cloudKeyPoses3D->points.empty())
             return;
 
+        // 1.4.2 如果DSNUM这种记录角点和平面点的数据结构中，发现数目不够多，也不处理
+        // 只有在数目足够多的时候才进行处理，默认最少要10个角点，100个平面点
         if (laserCloudCornerLastDSNum > edgeFeatureMinValidNum && laserCloudSurfLastDSNum > surfFeatureMinValidNum)
         {
             kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
@@ -1363,11 +1478,16 @@ public:
                 laserCloudOri->clear();
                 coeffSel->clear();
 
+                // 1.4.2.1 边缘点匹配优化,构建角点的点线残差
                 cornerOptimization();
+
+                // 1.4.2.2 平面点匹配优化,构建面点的点面残差
                 surfOptimization();
 
+                // 1.4.2.3 组合优化多项式系数
                 combineOptimizationCoeffs();
 
+                // 1.4.2.4 LM法优化，判断迭代误差是否足够小，如果是true则认为迭代完成，返回
                 if (LMOptimization(iterCount) == true)
                     break;
             }
@@ -1573,27 +1693,29 @@ public:
         aLoopIsClosed = true;
     }
 
+    // Step 1.5
     void saveKeyFramesAndFactor()
     {
+        // Step 1.5.1
+        // 计算当前帧与前一帧位姿变换，如果变化太小，不设为关键帧，反之设为关键帧
         if (saveFrame() == false)
             return;
 
-        // odom factor
+        // Step 1.5.2
         addOdomFactor();
 
-        // gps factor
-        // addGPSFactor();
+        // Step 1.5.3
+        // addGPSFactor();  // gps factor 默认没有开启
 
-        // loop factor
+        // Step 1.5.4
         addLoopFactor();
 
-        // cout << "****************************************************" << endl;
-        // gtSAMgraph.print("GTSAM Graph:\n");
-
-        // update iSAM
+        // Step 1.5.5
+        // update iSAM 执行优化
         isam->update(gtSAMgraph, initialEstimate);
         isam->update();
 
+        // 如果有回环，则多更新几次
         if (aLoopIsClosed == true)
         {
             isam->update();
@@ -1603,6 +1725,7 @@ public:
             isam->update();
         }
 
+        // update之后要清空一下保存的因子图，注：历史数据不会清掉，ISAM保存起来了
         gtSAMgraph.resize(0);
         initialEstimate.clear();
 
@@ -1611,17 +1734,20 @@ public:
         PointTypePose thisPose6D;
         Pose3 latestEstimate;
 
+        // 优化结果
         isamCurrentEstimate = isam->calculateEstimate();
+        // 当前帧位姿结果
         latestEstimate = isamCurrentEstimate.at<Pose3>(isamCurrentEstimate.size() - 1);
-        // cout << "****************************************************" << endl;
-        // isamCurrentEstimate.print("Current estimate: ");
 
+        // Step 1.5.7 多个变量的赋值操作，以及最后对transformTobeMapped的更新
+        // cloudKeyPoses3D加入当前帧位置信息
         thisPose3D.x = latestEstimate.translation().x();
         thisPose3D.y = latestEstimate.translation().y();
         thisPose3D.z = latestEstimate.translation().z();
         thisPose3D.intensity = cloudKeyPoses3D->size(); // this can be used as index
         cloudKeyPoses3D->push_back(thisPose3D);
 
+        // cloudKeyPoses6D加入当前帧位姿(位置+旋转)
         thisPose6D.x = thisPose3D.x;
         thisPose6D.y = thisPose3D.y;
         thisPose6D.z = thisPose3D.z;
@@ -1632,12 +1758,11 @@ public:
         thisPose6D.time = timeLaserInfoCur;
         cloudKeyPoses6D->push_back(thisPose6D);
 
-        // cout << "****************************************************" << endl;
-        // cout << "Pose covariance:" << endl;
-        // cout << isam->marginalCovariance(isamCurrentEstimate.size()-1) << endl << endl;
+        // 位姿协方差
         poseCovariance = isam->marginalCovariance(isamCurrentEstimate.size() - 1);
 
         // save updated transform
+        // transformTobeMapped用当前帧位姿更新
         transformTobeMapped[0] = latestEstimate.rotation().roll();
         transformTobeMapped[1] = latestEstimate.rotation().pitch();
         transformTobeMapped[2] = latestEstimate.rotation().yaw();
@@ -1652,6 +1777,7 @@ public:
         pcl::copyPointCloud(*laserCloudSurfLastDS, *thisSurfKeyFrame);
 
         // save key frame cloud
+        // 保存特征点降采样集合
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
 
@@ -1849,7 +1975,7 @@ int main(int argc, char **argv)
 
     ROS_INFO("\033[1;32m----> Lidar Map Optimization Started.\033[0m");
 
-    // 回环检测线程
+    // 回环检测线程(LIS自己的回环)
     std::thread loopthread(&mapOptimization::loopClosureThread, &MO);
     // 点云和地图保存线程
     std::thread visualizeMapThread(&mapOptimization::visualizeGlobalMapThread, &MO);
