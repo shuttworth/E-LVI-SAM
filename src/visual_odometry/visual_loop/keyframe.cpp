@@ -176,7 +176,7 @@ bool KeyFrame::findConnection(KeyFrame* old_kf)
 {
 	vector<cv::Point2f> matched_2d_cur, matched_2d_old; // 用于存储2D点（像素坐标）
 	vector<cv::Point2f> matched_2d_cur_norm, matched_2d_old_norm;
-	vector<cv::Point3f> matched_3d; // 用于存储2D点（像素坐标）
+	vector<cv::Point3f> matched_3d; // 用于存储3D点（世界坐标）
 	vector<double> matched_id;
 	vector<uchar> status;
 

@@ -219,7 +219,7 @@ bool VisualIMUAlignment(map<double, ImageFrame> &all_image_frame, Vector3d *Bgs,
     // 用相机位姿和IMU位姿建立约束标定陀螺仪bias
     solveGyroscopeBias(all_image_frame, Bgs);
 
-    // 相机IMU松耦合初始化，求解线性方solveGyroscopeBias程
+    // 相机IMU松耦合初始化，求解线性solveGyroscopeBias方程
     if (LinearAlignment(all_image_frame, g, x))
         return true;
     else
