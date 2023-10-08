@@ -1,4 +1,5 @@
 # E-LVI-SAM
+English README/[中文版README](README_CN.md)
 
 ## Easier and Simplified Implementation of LVI-SAM
 
