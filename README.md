@@ -17,7 +17,7 @@ We strongly recommend the docker
 ```docker pull liangjinli/slam-docker:v1.2```
 
 
-more details can be seen in [LVI-SAM Docker使用图文简介](https://github.com/shuttworth/E-LVI-SAM/blob/master/LVI-SAM%20Docker%E4%BD%BF%E7%94%A8%E5%9B%BE%E6%96%87%E7%AE%80%E4%BB%8B.pdf)
+more details can be seen in [LVI-SAM Docker使用图文简介](./LVI-SAM%20Docker%E4%BD%BF%E7%94%A8%E5%9B%BE%E6%96%87%E7%AE%80%E4%BB%8BV2.0_1009.pdf)
 
 ### without Docker
 See in [dependency](https://github.com/TixiaoShan/LVI-SAM#dependency)
